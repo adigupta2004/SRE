@@ -15,7 +15,7 @@ import minimalmodbus
 # ==============================================================================
 PORT_NAME = "/dev/tty.usbserial-A5069RR4"  # Bottom left port
 SLAVE_ADDRESS = 1          # Pr.09-00 Communication Address
-BAUDRATE = 38400            # Pr.09-01 Baud Rate
+BAUDRATE = 38400           # Pr.09-01 Baud Rate
 PARITY = serial.PARITY_EVEN  # Match Pr.09-04 setting
 STOPBITS = 1               # Match Pr.09-04 setting (8E1)
 BYTESIZE = 8
@@ -30,19 +30,30 @@ CMD_RUN_FWD = 0x0012
 CMD_RUN_REV = 0x0022
 CMD_STOP = 0x0001
 
-# Modbus Register Addresses (Hex)
-REG_CMD_RUN_STOP = 0x2000     # 8192
-REG_SPEED_TARGET  = 0x2001     # 8193
-REG_CMD_RESET     = 0x2002     # 8194
+# Command registers
+REG_CMD_RUN_STOP = 0x2000      # 8192
+REG_FREQ_COMMAND = 0x2001      # 8193
+REG_CMD_RESET = 0x2002         # 8194
 REG_TORQUE_TARGET = 0x0B22     # Pr.11-34 Torque Command (-100.0% to +100.0%)
 
-REG_OUTPUT_FREQ   = 0x2103     # 8451 (0.01 Hz)
-REG_DRIVE_STATUS  = 0x2101     # 8449
-REG_OUTPUT_CURR   = 0x2200     # 8704 (Output current)
-REG_CURRENT_DECIMAL = 0x211F   # 8479 (High byte gives decimal position for current)
-REG_DC_BUS_VOLT   = 0x2203     # 8707 (0.1 V)
-REG_OUTPUT_POWER  = 0x2206     # 8710 (0.1 kW)
+# Telemetry registers
+# REG_FREQ_COMMAND_MONITOR holds the same value as REG_FREQ_COMMAND above,
+# but REG_FREQ_COMMAND_MONITOR is meant for reading while REG_FREQ_COMMAND
+# is meant for writing the target frequency.
+REG_FREQ_COMMAND_MONITOR = 0x2102      # 8450 (Frequency command, 0.01 Hz)
+REG_OUTPUT_FREQ = 0x2103       # 8451 (Actual output frequency, 0.01 Hz)
+# Note - estimated speed is not very accurate; becomes 0 as soon as stop command
+# is given. So not really estimated speed maybe; somehow related to target? But it
+# is not the same as the target for sure. Some estimation is happening. Also, this
+# quantity is not a signed number.
+REG_MOTOR_SPEED = 0x2207       # 8711 (Estimated motor speed, rpm)
+
+REG_DC_BUS_VOLT = 0x2203       # 8707 (0.1 V)
+REG_OUTPUT_POWER = 0x2206      # 8710 (0.1 kW)
 REG_OUTPUT_TORQUE = 0x2208     # 8712 (Estimated signed output torque (%))
+REG_OUTPUT_CURR = 0x2200       # 8704 (Output current)
+REG_CURRENT_DECIMAL = 0x211F   # 8479 (High byte gives decimal position for current)
+REG_DRIVE_STATUS = 0x2101      # 8449
 
 
 def initialize_vfd(port, slave_addr):
@@ -62,16 +73,14 @@ def initialize_vfd(port, slave_addr):
         sys.exit(1)
 
 def send_run_command(vfd):
-    """Sends the RUN command to register 2000H"""
+    """Sends the RUN command to register 2000H."""
     try:
         if CONTROL_MODE == "SPEED":
             command = CMD_RUN_FWD if SPEED_DIRECTION == "FWD" else CMD_RUN_REV
         else:
             command = CMD_RUN
         vfd.write_register(REG_CMD_RUN_STOP, command, number_of_decimals=0, functioncode=6)
-
-        print(f"[VFD] RUN command sent"
-              f"{f' ({SPEED_DIRECTION})' if CONTROL_MODE == 'SPEED' else ''}.")
+        print(f"[VFD] RUN command sent{f' ({SPEED_DIRECTION})' if CONTROL_MODE == 'SPEED' else ''}.")
     except Exception as e:
         print(f"[ERROR] Failed to send RUN command: {e}")
 
@@ -113,28 +122,14 @@ def set_target_value(vfd, mode, val):
             elif val < 0:
                 SPEED_DIRECTION = "REV"
             raw_val = int(abs(val) * 100)
-            vfd.write_register(
-                REG_SPEED_TARGET,
-                raw_val,
-                number_of_decimals=0,
-                functioncode=6
-            )
-            print(
-                f"[VFD] Speed Target set to {abs(val):.2f} Hz "
-                f"| Direction: {SPEED_DIRECTION} | Raw: {raw_val}"
-            )
+            vfd.write_register(REG_FREQ_COMMAND, raw_val, number_of_decimals=0, functioncode=6)
+            print(f"[VFD] Speed Target set to {abs(val):.2f} Hz | Direction: {SPEED_DIRECTION} | Raw: {raw_val}")
 
         elif mode == "TORQUE":
             if not -100.0 <= val <= 100.0:
                 print("[ERROR] Torque command must be between -100.0% and +100.0%.")
                 return
-            vfd.write_register(
-                REG_TORQUE_TARGET,
-                val,
-                number_of_decimals=1,
-                functioncode=6,
-                signed=True
-            )
+            vfd.write_register(REG_TORQUE_TARGET, val, number_of_decimals=1, functioncode=6, signed=True)
             print(f"[VFD] Torque Command set to {val:.1f}%")
 
     except Exception as e:
@@ -144,28 +139,33 @@ def set_target_value(vfd, mode, val):
 def read_telemetry(vfd):
     """Reads and prints all core operating parameters from the VFD."""
     try:
+        freq_cmd_hz = vfd.read_register(REG_FREQ_COMMAND_MONITOR, number_of_decimals=2, functioncode=3)
         freq_hz = vfd.read_register(REG_OUTPUT_FREQ, number_of_decimals=2, functioncode=3)
-        dc_v    = vfd.read_register(REG_DC_BUS_VOLT, number_of_decimals=1, functioncode=3)
-        pwr_kw  = vfd.read_register(REG_OUTPUT_POWER, number_of_decimals=1, functioncode=3)
+        motor_rpm = vfd.read_register(REG_MOTOR_SPEED, number_of_decimals=0, functioncode=3)
+        dc_v = vfd.read_register(REG_DC_BUS_VOLT, number_of_decimals=1, functioncode=3)
+        pwr_kw = vfd.read_register(REG_OUTPUT_POWER, number_of_decimals=1, functioncode=3)
         torque_pct = vfd.read_register(REG_OUTPUT_TORQUE, number_of_decimals=1, functioncode=3, signed=True)
 
         # Read raw current without MinimalModbus scaling it
-        raw_current  = vfd.read_register(REG_OUTPUT_CURR, number_of_decimals=0, functioncode=3)
+        raw_current = vfd.read_register(REG_OUTPUT_CURR, number_of_decimals=0, functioncode=3)
         # Read register that tells us the current decimal position
         decimal_reg = vfd.read_register(REG_CURRENT_DECIMAL, number_of_decimals=0, functioncode=3)
         # Manual says the HIGH BYTE contains the decimal information
         decimal_places = (decimal_reg >> 8) & 0xFF
         curr_a = raw_current / (10 ** decimal_places)
 
-        status  = vfd.read_register(REG_DRIVE_STATUS, number_of_decimals=0, functioncode=3)
+        status = vfd.read_register(REG_DRIVE_STATUS, number_of_decimals=0, functioncode=3)
+
         # Status bits decoding (Bits 0-1)
         status_state = status & 0x03
         state_str = {0: "Stopped", 1: "Decelerating", 2: "Standby", 3: "Operating"}.get(status_state, "Unknown")
 
-        print("-" * 55)
-        print(f" Freq: {freq_hz:6.2f} Hz | Torque: {torque_pct:6.1f} % | Status: {state_str:<13} | Status Reg: 0x{status:04X} ")
-        print(f" DC Bus: {dc_v:6.1f} V   | Current: {curr_a:7.2f} A    | Power: {pwr_kw:6.1f} kW ")
-        print("-" * 55)
+        print("-" * 75)
+        print(f" Target Freq: {freq_cmd_hz:6.2f} Hz | Actual Output Freq: {freq_hz:6.2f} Hz | Estimated Motor Speed: {motor_rpm:5d} rpm")
+        print(f" Torque: {torque_pct:6.1f} %       | Status: {state_str:<13}")
+        print(f" DC Bus: {dc_v:6.1f} V       | Current: {curr_a:7.2f} A            | Power: {pwr_kw:6.1f} kW")
+        print("-" * 75)
+
     except Exception as e:
         print(f"[ERROR] Telemetry read failed: {e}")
 
@@ -182,7 +182,8 @@ def main():
     while True:
         print("\nCommands:")
         print(" [1] Read Telemetry")
-        # Note - FWD or REV mean CW or ACW. The sign convention is the same for both, torque and speed. Their combination determines motoring/regen.
+        # Note - FWD or REV mean CW or ACW. The sign convention is the same for both,
+        # torque and speed. Their combination determines motoring/regen.
         print(f" [2] Set Target ({'(Signed Hz: +FWD / -REV)' if CONTROL_MODE == 'SPEED' else '(Signed % Torque Command: +FWD / -REV)'})")
         print(" [3] Send RUN Command")
         print(" [4] Send STOP Command")
