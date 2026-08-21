@@ -13,7 +13,7 @@ import minimalmodbus
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-PORT_NAME = "/dev/tty.usbserial-A5069RR4"  # Bottom left port
+PORT_NAME = "/dev/tty.usbserial-A5069RR4"
 SLAVE_ADDRESS = 1          # Pr.09-00 Communication Address
 BAUDRATE = 38400           # Pr.09-01 Baud Rate
 PARITY = serial.PARITY_EVEN  # Match Pr.09-04 setting
