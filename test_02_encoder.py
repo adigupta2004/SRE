@@ -15,8 +15,9 @@ Registers read:
     2209H          PG feedback, 0..4095 per rev                     -> diagnostic / scale cross-check
     2207H          C2000 motor speed (rpm)                          -> comparison only (sensorless estimate)
 
-Supported tests:
-    A  Manual ring test     - watch POS change, check [XCHK] lines (1 rev = 4096 counts?)
+Supported tests (mode selected at startup):
+    A  Manual ring test     - cross-check mode: verify 222C/222D is scaled as expected,
+                              i.e. 1 rev of 2209H = +4096 POS counts ([XCHK] lines)
     B  Known constant speed - compare ENC_RPM vs known speed and vs C2000_RPM
     C  Different speeds     - check scaling at several speeds
     D  Accel / decel        - ENC_RPM / FILT_RPM track the change with correct sign
@@ -81,10 +82,9 @@ FILTER_TAU_S = 0.2
 # The motor is a 2-pole 11 kW machine (~3000 rpm); this leaves generous margin.
 MAX_PLAUSIBLE_RPM = 6000.0
 
-# Scale cross-check (POS vs unwrapped 2209H). 2209H can only be unwrapped
-# reliably if it moves less than half a rev per sample, so samples moving more
-# than a quarter rev are excluded (at 10 Hz this is ~150 rpm: fine for hand turning).
-XCHK_MAX_STEP_COUNTS = COUNTS_PER_REV // 4
+# Scale cross-check (POS vs unwrapped 2209H), selected at startup for Test A.
+# 2209H can only be unwrapped reliably if it moves less than half a rev per
+# sample (< 300 rpm at 10 Hz), so the ring must be turned slowly by hand.
 XCHK_MIN_PG_COUNTS = COUNTS_PER_REV // 4    # PG movement needed before judging a static POS
 XCHK_TOLERANCE = 0.02                       # Acceptable POS/PG ratio error (2 %)
 
@@ -232,7 +232,7 @@ def print_legend():
     print(f" ENC_RPM   = dCNT / {POSITION_COUNTS_PER_REV} / dt * 60   (raw encoder RPM)")
     print(f" FILT_RPM  = ENC_RPM through first-order low-pass, tau = {FILTER_TAU_S:.2f} s")
     print(" C2000_RPM = 2207H drive speed estimate (comparison only)")
-    print(" [XCHK]    = printed after each full PG revolution of slow movement:")
+    print(" [XCHK]    = cross-check mode only, printed after each full PG revolution:")
     print("             checks that 1 rev of 2209H equals 4096 position counts")
     print("-" * 75)
     print(" Press Ctrl+C to end.\n")
@@ -241,12 +241,12 @@ def print_legend():
 # ==============================================================================
 # MONITOR LOOP
 # ==============================================================================
-def run_monitor(vfd, first):
+def run_monitor(vfd, first, cross_check):
     period = 1.0 / SAMPLE_RATE_HZ
     prev = first
     filt_rpm = None
 
-    # Scale cross-check accumulators (slow-movement samples only)
+    # Scale cross-check accumulators (used only when cross_check is True)
     xchk_pos_total = 0
     xchk_pg_total = 0
     xchk_last_rev = 0
@@ -292,11 +292,10 @@ def run_monitor(vfd, first):
                 alpha = dt / (FILTER_TAU_S + dt)
                 filt_rpm += alpha * (enc_rpm - filt_rpm)
 
-            # --- Scale cross-check against 2209H (slow movement only) ---
-            d_pg = delta_pg(s.pg, prev.pg)
-            if abs(d_cnt) <= XCHK_MAX_STEP_COUNTS and abs(d_pg) <= XCHK_MAX_STEP_COUNTS:
+            # --- Scale cross-check against 2209H (operator turns ring slowly) ---
+            if cross_check:
                 xchk_pos_total += d_cnt
-                xchk_pg_total += d_pg
+                xchk_pg_total += delta_pg(s.pg, prev.pg)
 
                 if (not xchk_static_warned and xchk_pos_total == 0
                         and abs(xchk_pg_total) >= XCHK_MIN_PG_COUNTS):
@@ -317,7 +316,7 @@ def run_monitor(vfd, first):
     except KeyboardInterrupt:
         print()
         if xchk_pg_total != 0:
-            print("Cross-check summary (slow-movement samples):")
+            print("Cross-check summary:")
             print("  " + xchk_report(xchk_pos_total, xchk_pg_total))
 
 
@@ -343,8 +342,17 @@ def main():
 
         print("[VFD] Communication OK. Drive is NOT being started.")
         print_snapshot(first)
+
+        print("Modes:")
+        print(" [1] Scale cross-check + RPM (Test A: drive stopped, turn ring SLOWLY by hand)")
+        print(" [2] RPM only                (Tests B-F)")
+        choice = ""
+        while choice not in ("1", "2"):
+            choice = input("\nSelect Option > ").strip()
+        cross_check = choice == "1"
+
         print_legend()
-        run_monitor(vfd, first)
+        run_monitor(vfd, first, cross_check)
 
     except KeyboardInterrupt:
         print()
