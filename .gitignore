@@ -1,0 +1,9 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Datasheets and project docs (large PDFs, kept out of git)
+Manuals/
+
+# macOS Finder metadata
+.DS_Store

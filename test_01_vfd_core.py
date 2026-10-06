@@ -4,219 +4,123 @@ Script 01: Delta C2000 VFD Core Communication & Telemetry Test
 ----------------------------------------------------------------
 Protocol: Modbus RTU over RS-485 via minimalmodbus
 Target Hardware: Delta C2000 Series VFD
+
+Interactive menu: RUN / STOP / fault reset, speed or torque target, telemetry.
+Pr.00-10 on the keypad must match the control mode selected in this script.
 """
 
 import sys
-import serial
-import minimalmodbus
 
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
-PORT_NAME = "/dev/tty.usbserial-A5069RR4"
-SLAVE_ADDRESS = 1          # Pr.09-00 Communication Address
-BAUDRATE = 38400           # Pr.09-01 Baud Rate
-PARITY = serial.PARITY_EVEN  # Match Pr.09-04 setting
-STOPBITS = 1               # Match Pr.09-04 setting (8E1)
-BYTESIZE = 8
-TIMEOUT = 1.0              # Seconds
-
-# Operating Mode Flag for Target Dispatch ('SPEED' or 'TORQUE')
-CONTROL_MODE = "SPEED"
-SPEED_DIRECTION = "FWD"
-# Command macros
-CMD_RUN = 0x0002
-CMD_RUN_FWD = 0x0012
-CMD_RUN_REV = 0x0022
-CMD_STOP = 0x0001
-
-# Command registers
-REG_CMD_RUN_STOP = 0x2000      # 8192
-REG_FREQ_COMMAND = 0x2001      # 8193
-REG_CMD_RESET = 0x2002         # 8194
-REG_TORQUE_TARGET = 0x0B22     # Pr.11-34 Torque Command (-100.0% to +100.0%)
-
-# Telemetry registers
-# REG_FREQ_COMMAND_MONITOR holds the same value as REG_FREQ_COMMAND above,
-# but REG_FREQ_COMMAND_MONITOR is meant for reading while REG_FREQ_COMMAND
-# is meant for writing the target frequency.
-REG_FREQ_COMMAND_MONITOR = 0x2102      # 8450 (Frequency command, 0.01 Hz)
-REG_OUTPUT_FREQ = 0x2103       # 8451 (Actual output frequency, 0.01 Hz)
-# Note - estimated speed is not very accurate; becomes 0 as soon as stop command
-# is given. So not really estimated speed maybe; somehow related to target? But it
-# is not the same as the target for sure. Some estimation is happening. Also, this
-# quantity is not a signed number.
-REG_MOTOR_SPEED = 0x2207       # 8711 (Estimated motor speed, rpm)
-
-REG_DC_BUS_VOLT = 0x2203       # 8707 (0.1 V)
-REG_OUTPUT_POWER = 0x2206      # 8710 (0.1 kW)
-REG_OUTPUT_TORQUE = 0x2208     # 8712 (Estimated signed output torque (%))
-REG_OUTPUT_CURR = 0x2200       # 8704 (Output current)
-REG_CURRENT_DECIMAL = 0x211F   # 8479 (High byte gives decimal position for current)
-REG_DRIVE_STATUS = 0x2101      # 8449
+from dyno import comms
+from dyno import registers as reg
+from dyno.c2000 import C2000
+from dyno.console import banner, menu, rule
 
 
-def initialize_vfd(port, slave_addr):
-    """Initializes and configures the minimalmodbus instrument."""
-    try:
-        instrument = minimalmodbus.Instrument(port, slave_addr)
-        instrument.serial.baudrate = BAUDRATE
-        instrument.serial.bytesize = BYTESIZE
-        instrument.serial.parity = PARITY
-        instrument.serial.stopbits = STOPBITS
-        instrument.serial.timeout = TIMEOUT
-        instrument.mode = minimalmodbus.MODE_RTU
-        instrument.clear_buffers_before_each_transaction = True
-        return instrument
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize serial port {port}: {e}")
-        sys.exit(1)
-
-def send_run_command(vfd):
-    """Sends the RUN command to register 2000H."""
-    try:
-        if CONTROL_MODE == "SPEED":
-            command = CMD_RUN_FWD if SPEED_DIRECTION == "FWD" else CMD_RUN_REV
-        else:
-            command = CMD_RUN
-        vfd.write_register(REG_CMD_RUN_STOP, command, number_of_decimals=0, functioncode=6)
-        print(f"[VFD] RUN command sent{f' ({SPEED_DIRECTION})' if CONTROL_MODE == 'SPEED' else ''}.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send RUN command: {e}")
+def target_hint(control_mode):
+    if control_mode == "SPEED":
+        return "(Signed Hz: +FWD / -REV)"
+    return "(Signed % Torque Command: +FWD / -REV)"
 
 
-def send_stop_command(vfd):
-    """Sends the STOP command to register 2000H (Value = 0x0001)."""
-    try:
-        vfd.write_register(REG_CMD_RUN_STOP, 1, number_of_decimals=0, functioncode=6)
-        print("[VFD] STOP command sent.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send STOP command: {e}")
-
-
-def send_fault_reset(vfd):
-    """Sends a Fault Reset command to register 2002H (Value = 0x0002)."""
-    try:
-        vfd.write_register(REG_CMD_RESET, 2, number_of_decimals=0, functioncode=6)
-        print("[VFD] Fault RESET command sent.")
-    except Exception as e:
-        print(f"[ERROR] Failed to send Fault Reset command: {e}")
-
-
-def set_target_value(vfd, mode, val):
-    """
-    Sets the Speed or Torque target based on the selected mode.
-
-    - Speed Mode Target:
-        Frequency command in Hz, written to 2001H in 0.01 Hz increments.
-
-    - Torque Mode Target:
-        Pr.11-34 Torque Command in %, written in 0.1% increments.
-        Valid range: -100.0% to +100.0%.
-    """
-    global SPEED_DIRECTION
-    try:
-        if mode == "SPEED":
-            if val > 0:
-                SPEED_DIRECTION = "FWD"
-            elif val < 0:
-                SPEED_DIRECTION = "REV"
-            raw_val = int(abs(val) * 100)
-            vfd.write_register(REG_FREQ_COMMAND, raw_val, number_of_decimals=0, functioncode=6)
-            print(f"[VFD] Speed Target set to {abs(val):.2f} Hz | Direction: {SPEED_DIRECTION} | Raw: {raw_val}")
-
-        elif mode == "TORQUE":
-            if not -100.0 <= val <= 100.0:
-                print("[ERROR] Torque command must be between -100.0% and +100.0%.")
-                return
-            vfd.write_register(REG_TORQUE_TARGET, val, number_of_decimals=1, functioncode=6, signed=True)
-            print(f"[VFD] Torque Command set to {val:.1f}%")
-
-    except Exception as e:
-        print(f"[ERROR] Failed to set target value: {e}")
-
-
-def read_telemetry(vfd):
-    """Reads and prints all core operating parameters from the VFD."""
-    try:
-        freq_cmd_hz = vfd.read_register(REG_FREQ_COMMAND_MONITOR, number_of_decimals=2, functioncode=3)
-        freq_hz = vfd.read_register(REG_OUTPUT_FREQ, number_of_decimals=2, functioncode=3)
-        motor_rpm = vfd.read_register(REG_MOTOR_SPEED, number_of_decimals=0, functioncode=3)
-        dc_v = vfd.read_register(REG_DC_BUS_VOLT, number_of_decimals=1, functioncode=3)
-        pwr_kw = vfd.read_register(REG_OUTPUT_POWER, number_of_decimals=1, functioncode=3)
-        torque_pct = vfd.read_register(REG_OUTPUT_TORQUE, number_of_decimals=1, functioncode=3, signed=True)
-
-        # Read raw current without MinimalModbus scaling it
-        raw_current = vfd.read_register(REG_OUTPUT_CURR, number_of_decimals=0, functioncode=3)
-        # Read register that tells us the current decimal position
-        decimal_reg = vfd.read_register(REG_CURRENT_DECIMAL, number_of_decimals=0, functioncode=3)
-        # Manual says the HIGH BYTE contains the decimal information
-        decimal_places = (decimal_reg >> 8) & 0xFF
-        curr_a = raw_current / (10 ** decimal_places)
-
-        status = vfd.read_register(REG_DRIVE_STATUS, number_of_decimals=0, functioncode=3)
-
-        # Status bits decoding (Bits 0-1)
-        status_state = status & 0x03
-        state_str = {0: "Stopped", 1: "Decelerating", 2: "Standby", 3: "Operating"}.get(status_state, "Unknown")
-
-        print("-" * 75)
-        print(f" Target Freq: {freq_cmd_hz:6.2f} Hz | Actual Output Freq: {freq_hz:6.2f} Hz | Estimated Motor Speed: {motor_rpm:5d} rpm")
-        print(f" Torque: {torque_pct:6.1f} %       | Status: {state_str:<13}")
-        print(f" DC Bus: {dc_v:6.1f} V       | Current: {curr_a:7.2f} A            | Power: {pwr_kw:6.1f} kW")
-        print("-" * 75)
-
-    except Exception as e:
-        print(f"[ERROR] Telemetry read failed: {e}")
+def print_telemetry(tel):
+    rule()
+    print(f" Target Freq: {tel.freq_cmd_hz:6.2f} Hz | Actual Output Freq: {tel.output_freq_hz:6.2f} Hz "
+          f"| Estimated Motor Speed: {tel.motor_rpm:5d} rpm")
+    print(f" Torque: {tel.torque_pct:6.1f} %       | Status: {tel.state:<13}")
+    print(f" DC Bus: {tel.dc_bus_v:6.1f} V       | Current: {tel.current_a:7.2f} A            "
+          f"| Power: {tel.output_power_kw:6.1f} kW")
+    rule()
 
 
 def main():
-    global CONTROL_MODE
-    print("=======================================================")
-    print(" Delta C2000 Modbus RTU Core Control & Telemetry Test")
-    print(f" Mode: {CONTROL_MODE} | Port: {PORT_NAME} | Baud: {BAUDRATE}")
-    print("=======================================================")
+    control_mode = "SPEED"        # 'SPEED' or 'TORQUE'
+    speed_direction = reg.FWD     # Direction sent with RUN in speed mode
 
-    vfd = initialize_vfd(PORT_NAME, SLAVE_ADDRESS)
+    banner(
+        "Delta C2000 Modbus RTU Core Control & Telemetry Test",
+        f"Mode: {control_mode} | {comms.describe_link()}",
+    )
 
-    while True:
-        print("\nCommands:")
-        print(" [1] Read Telemetry")
-        # Note - FWD or REV mean CW or ACW. The sign convention is the same for both,
-        # torque and speed. Their combination determines motoring/regen.
-        print(f" [2] Set Target ({'(Signed Hz: +FWD / -REV)' if CONTROL_MODE == 'SPEED' else '(Signed % Torque Command: +FWD / -REV)'})")
-        print(" [3] Send RUN Command")
-        print(" [4] Send STOP Command")
-        print(" [5] Reset Fault")
-        print(" [6] Toggle Control Mode in Script (Current: " + CONTROL_MODE + ")")
-        print(" [q] Quit")
+    try:
+        vfd = C2000.connect()
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize serial port: {e}")
+        sys.exit(1)
 
-        choice = input("\nSelect Option > ").strip().lower()
+    try:
+        while True:
+            choice = menu("Commands", [
+                ("1", "Read Telemetry"),
+                # Note - FWD or REV mean CW or ACW. The sign convention is the same for both,
+                # torque and speed. Their combination determines motoring/regen.
+                ("2", f"Set Target {target_hint(control_mode)}"),
+                ("3", "Send RUN Command"),
+                ("4", "Send STOP Command"),
+                ("5", "Reset Fault"),
+                ("6", f"Toggle Control Mode in Script (Current: {control_mode})"),
+                ("q", "Quit"),
+            ])
 
-        if choice == "1":
-            read_telemetry(vfd)
-        elif choice == "2":
-            val_str = input(f"Enter Target Value ({'(Signed Hz: +FWD / -REV): ' if CONTROL_MODE == 'SPEED' else '(Signed % Torque Command: +FWD / -REV)'}): ").strip()
             try:
-                val = float(val_str)
-                set_target_value(vfd, CONTROL_MODE, val)
-            except ValueError:
-                print("[ERROR] Invalid numeric input.")
-        elif choice == "3":
-            send_run_command(vfd)
-        elif choice == "4":
-            send_stop_command(vfd)
-        elif choice == "5":
-            send_fault_reset(vfd)
-        elif choice == "6":
-            CONTROL_MODE = "TORQUE" if CONTROL_MODE == "SPEED" else "SPEED"
-            print(f"[SCRIPT] Script Target Mode updated to: {CONTROL_MODE}")
-            print("Note: Ensure Pr.00-10 on the VFD keypad matches this selection!")
-        elif choice == "q":
-            print("Exiting test script...")
-            break
-        else:
-            print("Invalid choice. Try again.")
+                if choice == "1":
+                    print_telemetry(vfd.read_telemetry())
+
+                elif choice == "2":
+                    val_str = input(f"Enter Target Value {target_hint(control_mode)}: ").strip()
+                    try:
+                        val = float(val_str)
+                    except ValueError:
+                        print("[ERROR] Invalid numeric input.")
+                        continue
+
+                    if control_mode == "SPEED":
+                        # 0 Hz keeps the previous direction
+                        if val > 0:
+                            speed_direction = reg.FWD
+                        elif val < 0:
+                            speed_direction = reg.REV
+                        raw = vfd.set_frequency(val)
+                        print(f"[VFD] Speed Target set to {abs(val):.2f} Hz | Direction: {speed_direction} | Raw: {raw}")
+                    else:
+                        try:
+                            vfd.set_torque(val)
+                        except ValueError as e:
+                            print(f"[ERROR] {e}")
+                            continue
+                        print(f"[VFD] Torque Command set to {val:.1f}%")
+
+                elif choice == "3":
+                    if control_mode == "SPEED":
+                        vfd.run(speed_direction)
+                        print(f"[VFD] RUN command sent ({speed_direction}).")
+                    else:
+                        vfd.run()
+                        print("[VFD] RUN command sent.")
+
+                elif choice == "4":
+                    vfd.stop()
+                    print("[VFD] STOP command sent.")
+
+                elif choice == "5":
+                    vfd.reset_fault()
+                    print("[VFD] Fault RESET command sent.")
+
+                elif choice == "6":
+                    control_mode = "TORQUE" if control_mode == "SPEED" else "SPEED"
+                    print(f"[SCRIPT] Script Target Mode updated to: {control_mode}")
+                    print("Note: Ensure Pr.00-10 on the VFD keypad matches this selection!")
+
+                elif choice == "q":
+                    print("Exiting test script...")
+                    break
+
+            except Exception as e:
+                # Communication failure on any Modbus transaction: report and keep the menu alive.
+                print(f"[ERROR] Modbus transaction failed: {e}")
+
+    finally:
+        vfd.close()
 
 
 if __name__ == "__main__":
