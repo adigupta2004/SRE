@@ -25,8 +25,8 @@ FWD (A leads B, Pr.10-02 = 1) = positive RPM; REV = negative RPM.
 
 from dataclasses import dataclass
 
-from dyno import config
-from dyno.mathutils import LowPassFilter, counts_to_rpm, wrap_delta
+import config
+from utils.mathutils import LowPassFilter, counts_to_rpm, wrap_delta
 
 POSITION_MODULUS = 2**32
 

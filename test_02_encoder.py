@@ -17,12 +17,13 @@ The supported tests (A-F) are listed in print_tests() and shown at startup.
 Press Ctrl+C to end.
 """
 
-from dyno import comms, config
-from dyno.c2000 import C2000
-from dyno.console import banner, log, menu, rule, show_status
-from dyno.encoder import ShaftSpeedEstimator
-from dyno.mathutils import to_signed32, wrap_delta
-from dyno.timing import RatePacer
+import config
+from hardware import comms
+from hardware.c2000 import C2000
+from hardware.encoder import ShaftSpeedEstimator
+from utils.console import banner, log, menu, rule, show_status
+from utils.mathutils import to_signed32, wrap_delta
+from utils.timing import RatePacer
 
 # Cross-check (Test A): acceptable error in the POS/PG ratio.
 # 2209H wraps every rev, so it can only be followed if it moves less than half a

@@ -3,8 +3,8 @@
 Python software to turn an existing induction-motor test rig into a **plug-and-play
 regenerative dynamometer**. The user couples a Machine Under Test (MUT) to the dyno
 motor and controls everything from a PC GUI. Development proceeds through numbered
-test scripts, each proving one slice of the final app; they all share the `dyno/`
-package so nothing is rewritten for the final `dyno_app.py`.
+test scripts, each proving one slice of the final app; they all share the code in
+`hardware/` and `utils/` so nothing is rewritten for the final `dyno_app.py`.
 
 The authoritative spec is `Manuals/Project overview.pdf` (tabs: Goals, Plan, Dyno side
 docs, MUT side docs). Read it before any non-trivial change.
@@ -38,16 +38,17 @@ PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
 ## Code layout
 
 ```
-dyno/                 shared package — all reusable logic lives here
-  config.py           user-editable settings: serial port/link, encoder PPR, loop rate, filter, limits
-  registers.py        C2000 Modbus register map + command words (fixed hardware facts)
-  mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
-  timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
-  console.py          banner, rule, live status line (show_status/log), menu
+config.py             user-editable settings: serial port/link, encoder PPR, loop rate, filter, limits
+hardware/             device-specific code (talks to or describes a device)
   comms.py            open_instrument(): the only place pyserial/minimalmodbus is configured
+  registers.py        C2000 Modbus register map + command words (fixed hardware facts)
   c2000.py            C2000 driver class: run/stop/reset_fault/set_frequency/set_torque,
                       read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample
   encoder.py          ShaftSpeedEstimator: EncoderSample stream -> signed RPM (+ filtered)
+utils/                generic helpers, no hardware knowledge
+  mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
+  timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
+  console.py          banner, rule, live status line (show_status/log), menu
 test_01_vfd_core.py   Script 1: interactive C2000 control + telemetry menu
 test_02_encoder.py    Script 2: READ-ONLY encoder shaft-speed monitor (+ scale cross-check)
 Manuals/              datasheets + project overview (PDFs, not tracked in git)
@@ -55,13 +56,17 @@ Manuals/              datasheets + project overview (PDFs, not tracked in git)
 
 Layering rules (keep these when adding scripts):
 - Scripts own only UI and test-specific logic; anything a later script or the final
-  app will need goes into `dyno/`.
+  app will need goes into `hardware/` (device-specific) or `utils/` (generic). New
+  areas (control logic, data logging, GUI) get their own top-level folder only when
+  they are actually written — keep the structure generic and simple.
 - Register addresses/encodings only in `registers.py` and `c2000.py`. Tunables only in
   `config.py`. Never hard-code a port, baud rate or register number in a script.
 - Library code **raises** on comm failure and **never prints**; scripts catch, log and
   decide (continue / retry / stop). Validation errors raise `ValueError`.
 - `mathutils.py` stays pure (no I/O) so it can be tested without hardware.
-- Scripts run from the repo root (`python test_02_encoder.py`) so `import dyno` works.
+- Test scripts and `dyno_app.py` stay in the repo root so `import config`,
+  `from hardware...` and `from utils...` work with no path setup (decided deliberately;
+  revisit only if the root gets crowded).
 
 ## Running
 

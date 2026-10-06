@@ -11,10 +11,10 @@ Pr.00-10 on the keypad must match the control mode selected in this script.
 
 import sys
 
-from dyno import comms
-from dyno import registers as reg
-from dyno.c2000 import C2000
-from dyno.console import banner, menu, rule
+from hardware import comms
+from hardware import registers as reg
+from hardware.c2000 import C2000
+from utils.console import banner, menu, rule
 
 
 def target_hint(control_mode):

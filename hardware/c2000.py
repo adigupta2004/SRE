@@ -12,9 +12,10 @@ Control mode (Pr.00-10 speed/torque) is set on the keypad, not by software.
 import time
 from dataclasses import dataclass
 
-from dyno import comms, config
-from dyno import registers as reg
-from dyno.mathutils import combine_words
+import config
+from hardware import comms
+from hardware import registers as reg
+from utils.mathutils import combine_words
 
 POS_WORD_COUNT = reg.REG_POS_HIGH - reg.REG_POS_LOW + 1    # 2 words, one transaction
 

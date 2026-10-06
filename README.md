@@ -8,7 +8,8 @@ Baumer encoder on the dyno shaft provides signed shaft speed.
 
 The final application (`dyno_app.py`, a GUI with torque-profile, custom-function and
 drivecycle modes) is being built step by step: each `test_XX_*.py` script proves one
-part of it on the real hardware, and all of them share the code in `dyno/`.
+part of it on the real hardware, and all of them share the code in `hardware/` and
+`utils/`.
 
 ## Setup
 
@@ -25,13 +26,14 @@ part of it on the real hardware, and all of them share the code in `dyno/`.
 2. **RS-485 link** — connect the USB-RS485 adapter A+ → C2000 SG+, B− → SG−, with the
    C2000's 485 termination switch at "120" and a 120 Ω resistor across A+/B− at the
    adapter end (twisted pair).
-3. **Serial port** — set `PORT_NAME` in [dyno/config.py](dyno/config.py) to your
+3. **Serial port** — set `PORT_NAME` in [config.py](config.py) to your
    adapter (macOS: `ls /dev/tty.usbserial*`; Linux: usually `/dev/ttyUSB0`).
 4. **Drive settings** — the C2000 must match the link settings in `config.py`:
    Pr.09-00 = 1 (address), Pr.09-01 = 38.4 kbps, Pr.09-04 = 14 (8,E,1 RTU),
    Pr.09-30 = 0. The full parameter list is in the project overview document.
 
-Always run scripts from the repository root, so that `import dyno` works.
+Scripts live in the repository root, so imports from `hardware/` and `utils/` work
+without any setup.
 
 ## Scripts
 
@@ -62,20 +64,23 @@ Press Ctrl+C to stop a monitoring script; `q` quits the Script 1 menu.
 ## Code layout
 
 ```
-dyno/
-  config.py      settings you may need to change (port, encoder, loop rate, limits)
-  registers.py   C2000 Modbus register addresses and command words
-  comms.py       opens the Modbus RTU connection
-  c2000.py       C2000 driver: run/stop/reset, speed and torque targets, telemetry
-  encoder.py     signed shaft RPM from the encoder position counter
-  mathutils.py   counter arithmetic, unit conversion, low-pass filter
-  timing.py      fixed-rate loop timing
-  console.py     terminal display helpers
-test_XX_*.py     step-by-step hardware test scripts
-Manuals/         datasheets and project overview (kept out of git)
+config.py          settings you may need to change (port, encoder, loop rate, limits)
+hardware/          everything that talks to or describes a device
+  comms.py         opens the Modbus RTU connection
+  registers.py     C2000 Modbus register addresses and command words
+  c2000.py         C2000 driver: run/stop/reset, speed and torque targets, telemetry
+  encoder.py       signed shaft RPM from the encoder position counter
+utils/             generic helpers with no hardware knowledge
+  mathutils.py     counter arithmetic, unit conversion, low-pass filter
+  timing.py        fixed-rate loop timing
+  console.py       terminal display helpers (banners, status line, menus)
+test_XX_*.py       step-by-step hardware test scripts
+Manuals/           datasheets and project overview (kept out of git)
 ```
 
-To add a new script: put anything the final application will also need into `dyno/`
-and keep only the test-specific menus and checks in the script. Settings belong in
+To add a new script: put anything the final application will also need into
+`hardware/` (device-specific) or `utils/` (generic), and keep only the test-specific
+menus and checks in the script. New areas such as control logic or the GUI get their
+own folder when they are written. Settings belong in
 `config.py` and register numbers in `registers.py`; scripts should not hard-code
 either. See [CLAUDE.md](CLAUDE.md) for the full design notes and register details.

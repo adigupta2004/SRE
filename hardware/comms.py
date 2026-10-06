@@ -5,7 +5,7 @@ minimalmodbus; every device on the RS-485 bus is opened through here.
 
 import minimalmodbus
 
-from dyno import config
+import config
 
 
 def open_instrument(port=config.PORT_NAME, slave_address=config.SLAVE_ADDRESS):

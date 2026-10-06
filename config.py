@@ -3,7 +3,7 @@ User-editable configuration shared by all test scripts and the final app.
 
 Only values that someone might reasonably change belong here. Fixed hardware
 facts (register addresses, command words, parameter ranges) live in
-dyno/registers.py.
+hardware/registers.py.
 """
 
 import serial
