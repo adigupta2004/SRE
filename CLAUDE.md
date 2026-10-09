@@ -48,9 +48,10 @@ hardware/             device-specific code (talks to or describes a device)
 utils/                generic helpers, no hardware knowledge
   mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
   timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
-  console.py          banner, rule, live status line (show_status/log), menu
+  console.py          banner, rule, live status line (show_status/log), enter_pressed, menu
 test_01_vfd_core.py   Script 1: interactive C2000 control + telemetry menu
 test_02_encoder.py    Script 2: READ-ONLY encoder shaft-speed monitor (+ scale cross-check)
+test_03_coupled_torque.py  Script 3: staged coupled torque test (0 % → sign check → constant/ramp)
 Manuals/              datasheets + project overview (PDFs, not tracked in git)
 ```
 
@@ -92,10 +93,12 @@ in `README.md`; keep its script table in step with the plan.
 3. Mechanical coupling — IN PROGRESS.
 4. Encoder hardware + C2000 PG interface — DONE (4096 counts/rev verified).
 5. Script 2 encoder & shaft speed — DONE.
-6. **Next: configure C2000 for IM TQCPG, then Script 3** `test_03_coupled_torque.py`:
-   coupled constant/ramped torque, torque sign & quadrants, monitor torque/current/
-   power/DC bus, regen through REG2000, torque-mode speed limits, normal stop
-   (torque → 0, then STOP). Fit the blue IM fan for any coupled test above 5 kW.
+6. C2000 configured for IM TQCPG (Pr.00-10 = 2, Pr.00-13 = 0, Pr.11-33 = 1).
+   **Script 3** `test_03_coupled_torque.py` is WRITTEN, not yet run on the rig. It is
+   deliberately atomic: no logging, plots, fault handling or new registers. Torque sign
+   comes only from Pr.11-34 (RUN without FWD/REV bits). Script-level limits:
+   MAX_TEST_TORQUE_PCT, SIGN_TEST_TORQUE_PCT, RAMP_RATE_PCT_PER_S. Fit the blue IM fan
+   for any coupled test above 5 kW.
 7. Then in order: Script 4 `test_04_control_loop.py` (10 Hz loop, limits, CSV logging,
    comm-error handling, ramp-to-zero before STOP, loop timing), Script 5
    `test_05_torque_validation.py` (estimated actual torque, T = P/ω cross-check),

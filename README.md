@@ -41,7 +41,7 @@ without any setup.
 |---|---|---|
 | `test_01_vfd_core.py` | Done (speed control) | Interactive menu: RUN / STOP / fault reset, speed (Hz) or torque (%) target, telemetry readout. The control mode chosen in the script must match Pr.00-10 on the keypad. |
 | `test_02_encoder.py` | Done | **Read-only** shaft-speed monitor: live signed RPM from the encoder, compared with the C2000's own estimate. Mode 1 also checks the encoder scaling while you turn the shaft slowly by hand. Never sends commands to the drive. |
-| `test_03_coupled_torque.py` | Next | Coupled torque control with the MUT, including regeneration through the REG2000 |
+| `test_03_coupled_torque.py` | Written, to be run on the rig | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
 | `test_04` … `test_07` | Planned | Control loop + logging, torque validation, torque profiles, drivecycle simulation |
 | `dyno_app.py` | Planned | Final GUI |
 
@@ -49,7 +49,8 @@ Example:
 ```
 python test_02_encoder.py
 ```
-Press Ctrl+C to stop a monitoring script; `q` quits the Script 1 menu.
+Press Ctrl+C to stop a monitoring script; `q` quits the Script 1 menu. In Script 3,
+Enter leaves a live display and Ctrl+C is a controlled shutdown.
 
 ## Safety
 

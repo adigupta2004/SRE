@@ -2,7 +2,9 @@
 Terminal output helpers shared by the test scripts.
 """
 
+import select
 import shutil
+import sys
 
 RULE_WIDTH = 75
 
@@ -28,6 +30,18 @@ def show_status(line):
 def log(message):
     """Prints a persistent message above the live status line."""
     print("\r\x1b[K" + message, flush=True)
+
+
+def enter_pressed():
+    """
+    Non-blocking: True if the user has pressed Enter since the last call.
+    Lets a live display run until Enter while Ctrl+C stays free for shutdown.
+    Uses select() on stdin, so it works in macOS/Linux terminals (not Windows).
+    """
+    if select.select([sys.stdin], [], [], 0)[0]:
+        sys.stdin.readline()
+        return True
+    return False
 
 
 def menu(title, options):

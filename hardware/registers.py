@@ -59,8 +59,11 @@ REG_OUTPUT_POWER = 0x2206      # 8710  0.1 kW
 # Note - estimated speed is not very accurate; becomes 0 as soon as stop command
 # is given. So not really estimated speed maybe; somehow related to target? But it
 # is not the same as the target for sure. Some estimation is happening. Also, this
-# quantity is not a signed number (observed on hardware: magnitude only).
-REG_MOTOR_SPEED = 0x2207       # 8711  estimated motor speed, rpm (unsigned)
+# quantity is not a signed number (observed on hardware: magnitude only). Note - 
+# this comment is for when we are doing sensorless control.
+REG_MOTOR_SPEED = 0x2207       # 8711 motor speed from VFD's calculation, rpm (unsigned)
+                               # When sensorless it is estimated from speeds, when TQCPG 
+                               # it is probably from encoder itself.
 REG_OUTPUT_TORQUE = 0x2208     # 8712  estimated output torque, signed, 0.1 %
 REG_PG_FEEDBACK = 0x2209       # 8713  PG feedback, 0..4095 per mechanical rev
 REG_POS_LOW = 0x222C           # 8748  motor actual position, low word

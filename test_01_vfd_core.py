@@ -7,6 +7,10 @@ Target Hardware: Delta C2000 Series VFD
 
 Interactive menu: RUN / STOP / fault reset, speed or torque target, telemetry.
 Pr.00-10 on the keypad must match the control mode selected in this script.
+
+Required C2000 setting:
+    Pr.09-03 = 0.0 comm timeout disabled - the script stops talking to the
+                   drive while a menu waits for input
 """
 
 import sys
