@@ -31,8 +31,14 @@ REV = "REV"
 RUN_CMD_BY_DIRECTION = {FWD: CMD_RUN_FWD, REV: CMD_RUN_REV}
 
 # Pr.11-34 Torque Command, signed, 0.1 % units, relative to Pr.11-27.
-# FWD/REV mean CW/ACW; torque and speed share the same sign convention, and
-# their combination determines motoring vs regeneration.
+# 1. FWD/REV mean CW/ACW in speed control; sign of value in 0x0B22 means
+#    CW/ACW in torque control
+# 2. When giving a torque command, register 0x0B22 is the only register that 
+#    matters. FWD/REV bits of 0x2000 are not read during a torque command, they
+#    are only used to indicate direction during speed control.
+# 3. Torque and speed share the same sign convention; FWD (speed) and + (torque) 
+#    both mean one of CW/ACW, and REV (speed) and - (torque) both mean the other.
+#    The combination of torque and speed directions determines motoring vs regen.
 REG_TORQUE_TARGET = param_address(11, 34)   # 0x0B22
 TORQUE_CMD_MIN_PCT = -100.0
 TORQUE_CMD_MAX_PCT = 100.0
