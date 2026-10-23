@@ -147,8 +147,8 @@ def print_stages():
     print(" 1  MUT only           - dyno STOPPED at 0%; start the MUT forward, confirm steady positive ENC")
     print(" 2  Dyno at 0% torque  - RUN at 0% torque; shaft speed should not change")
     print(f" 3  Torque sign        - {SIGN_TEST_TORQUE_PCT:+.1f}% must OPPOSE the forward MUT; if not, zero torque and STOP")
-    print(" 4  Constant torque    - step to a signed target and hold")
-    print(f" 5  Torque ramp        - ramp to a signed target at {RAMP_RATE_PCT_PER_S:.1f} %/s and hold")
+    print(" 4  Constant torque    - step to an opposing (negative) target and hold")
+    print(f" 5  Torque ramp        - ramp to an opposing (negative) target at {RAMP_RATE_PCT_PER_S:.1f} %/s and hold")
     print(" Exit / Ctrl+C         - ramp to 0%, write 0%, STOP")
 
 
@@ -164,18 +164,28 @@ def print_legend():
 
 
 def ask_torque():
-    """Asks for a signed torque target; returns None if invalid or above the test limit."""
-    text = input(f"Target torque in % (signed, |T| <= {MAX_TEST_TORQUE_PCT:.1f}; "
-                 f"negative opposes a forward MUT): ").strip()
-    try:
-        value = float(text)
-    except ValueError:
-        print("[ERROR] Invalid number.")
-        return None
-    if abs(value) > MAX_TEST_TORQUE_PCT:
-        print(f"[ERROR] Above the {MAX_TEST_TORQUE_PCT:.1f}% test limit (MAX_TEST_TORQUE_PCT).")
-        return None
-    return value
+    """
+    Asks until it gets an opposing torque target: -MAX_TEST_TORQUE_PCT .. 0 %.
+    Positive torque would assist the forward-running MUT, so it is rejected.
+    Returns None if the user leaves the input blank (cancel).
+    """
+    while True:
+        text = input(f"Target torque in % (-{MAX_TEST_TORQUE_PCT:.1f} to 0, negative opposes "
+                     f"the MUT; blank = cancel): ").strip()
+        if not text:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            print("[ERROR] Invalid number.")
+            continue
+        if value > 0:
+            print("[ERROR] Positive torque would ASSIST the forward-running MUT. Enter a value <= 0.")
+            continue
+        if value < -MAX_TEST_TORQUE_PCT:
+            print(f"[ERROR] Beyond the -{MAX_TEST_TORQUE_PCT:.1f}% test limit (MAX_TEST_TORQUE_PCT).")
+            continue
+        return value
 
 
 def torque_sign_test(test):

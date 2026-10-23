@@ -129,6 +129,9 @@ in `README.md`; keep its script table in step with the plan.
 - 2207H motor speed is **unsigned** and unreliable (drops to 0 on STOP) — comparison only.
 - 2200H output current: decimal places are in the **high byte of 211FH**.
 - 2208H output torque %: signed. 2101H bits 1-0: Stopped/Decelerating/Standby/Operating.
+- 2206H output power (0.1 kW) is **signed** — negative when regenerating (seen in
+  Script 3: read unsigned, −0.1 kW appeared as 6553.5 kW). Light regen reads ~0 kW
+  because the regenerated power only just covers motor losses.
 - Shaft speed: 222CH (low) / 222DH (high) = free-running 32-bit position counter,
   4096 counts/rev; speed = signed modulo-2^32 delta / dt. 2209H = PG position
   0..4095 per rev (wraps every rev; only for slow-speed cross-checks).

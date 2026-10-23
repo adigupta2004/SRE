@@ -31,7 +31,7 @@ class Telemetry:
     output_freq_hz: float
     motor_rpm: int          # 2207H, unsigned magnitude (sensorless estimate)
     dc_bus_v: float
-    output_power_kw: float
+    output_power_kw: float  # 2206H, signed (negative = regenerating)
     torque_pct: float       # 2208H, signed
     current_a: float
     status_word: int        # raw 2101H
@@ -127,7 +127,7 @@ class C2000:
             output_freq_hz=self._read(reg.REG_OUTPUT_FREQ, decimals=2),
             motor_rpm=self._read(reg.REG_MOTOR_SPEED),
             dc_bus_v=self._read(reg.REG_DC_BUS_VOLT, decimals=1),
-            output_power_kw=self._read(reg.REG_OUTPUT_POWER, decimals=1),
+            output_power_kw=self._read(reg.REG_OUTPUT_POWER, decimals=1, signed=True),
             torque_pct=self._read(reg.REG_OUTPUT_TORQUE, decimals=1, signed=True),
             current_a=self.read_output_current(),
             status_word=self._read(reg.REG_DRIVE_STATUS),

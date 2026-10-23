@@ -55,7 +55,9 @@ REG_CURRENT_DECIMAL = 0x211F   # 8479  high byte = decimal places of output curr
 
 REG_OUTPUT_CURR = 0x2200       # 8704  output current, scaled by 211FH high byte
 REG_DC_BUS_VOLT = 0x2203       # 8707  0.1 V
-REG_OUTPUT_POWER = 0x2206      # 8710  0.1 kW
+# Output power is signed (two's complement), negative when regenerating (observed on 
+# hardware in Script 3).
+REG_OUTPUT_POWER = 0x2206      # 8710  output power, signed, 0.1 kW
 # Note - estimated speed is not very accurate; becomes 0 as soon as stop command
 # is given. So not really estimated speed maybe; somehow related to target? But it
 # is not the same as the target for sure. Some estimation is happening. Also, this
