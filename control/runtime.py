@@ -43,6 +43,7 @@ class Sample:
     elapsed_time: float           # s since RUN (None in IDLE)
     loop_dt: float                # s since the previous cycle started
     cycle_time: float             # s spent on this cycle's reads/writes
+    overruns: int                 # cycles so far this run with cycle_time > loop period (None in IDLE)
     profile_time: float           # s since the profile started (None outside RUNNING)
     profile_target_pct: float     # raw profile target before limits (None outside ENTERING/RUNNING)
     torque_command_pct: float     # torque in force after this cycle's write: last one the drive accepted (None in IDLE)
@@ -327,11 +328,14 @@ class DynoRuntime:
 
         # 7-9. Timing, logging, publishing
         cycle_time = time.monotonic() - t_start      # reads + write only: logging/publishing not included
+        if self.phase != IDLE and cycle_time > self._period:
+            self._overruns += 1                      # counted before the Sample so it carries the new total
         sample = Sample(
             phase=self.phase,
             elapsed_time=None if self.phase == IDLE else t_start - self._run_t0,
             loop_dt=loop_dt,
             cycle_time=cycle_time,
+            overruns=None if self.phase == IDLE else self._overruns,
             profile_time=profile_time,
             profile_target_pct=target,
             torque_command_pct=None if self.phase == IDLE else self._command_in_force,
@@ -355,8 +359,6 @@ class DynoRuntime:
                     self._log_ok = False
                     self.on_message(f"[ERROR] CSV logging stopped for this run: {e}")
             self._samples.append(sample)
-            if cycle_time > self._period:
-                self._overruns += 1
         self.on_sample(sample)
 
         # The stop ramp is done once the target has reached 0 AND the drive has

@@ -61,7 +61,6 @@ class DynoWindow(QMainWindow):
         self.setWindowTitle("Dyno - Torque Runtime")
         self.runtime = runtime
         self._phase = IDLE
-        self._overruns = 0
         self._close_pending = False
 
         self._bridge = RuntimeBridge()
@@ -156,7 +155,6 @@ class DynoWindow(QMainWindow):
             return
         self._torque_plot.clear()
         self._speed_plot.clear()
-        self._overruns = 0
         self._tabs.setCurrentIndex(0)
         self.runtime.start_run(profile)
 
@@ -183,8 +181,6 @@ class DynoWindow(QMainWindow):
         self._update_buttons()
 
         if s.phase != IDLE:
-            if s.cycle_time > 1.0 / config.LOOP_RATE_HZ:
-                self._overruns += 1
             self._torque_plot.append("Command", s.elapsed_time, s.torque_command_pct)
             self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_estimate_pct)
             self._speed_plot.append("Encoder RPM", s.elapsed_time, s.encoder_rpm)
@@ -202,7 +198,7 @@ class DynoWindow(QMainWindow):
             "dc_bus": fmt(s.dc_bus_v, ".1f", " V"),
             "loop_dt": fmt(s.loop_dt * 1000, ".0f", " ms"),
             "elapsed": fmt(s.elapsed_time, ".1f", " s"),
-            "overruns": str(self._overruns) if s.phase != IDLE else "-",
+            "overruns": fmt(s.overruns, "d"),
         })
 
     def _on_run_finished(self, r):
