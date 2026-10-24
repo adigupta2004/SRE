@@ -7,3 +7,9 @@ Manuals/
 
 # macOS Finder metadata
 .DS_Store
+
+# Virtual environment (recreate with: pip install -r requirements.txt)
+.venv/
+
+# CSV run logs written by the test scripts
+logs/

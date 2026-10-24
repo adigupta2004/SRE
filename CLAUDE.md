@@ -4,7 +4,8 @@ Python software to turn an existing induction-motor test rig into a **plug-and-p
 regenerative dynamometer**. The user couples a Machine Under Test (MUT) to the dyno
 motor and controls everything from a PC GUI. Development proceeds through numbered
 test scripts, each proving one slice of the final app; they all share the code in
-`hardware/` and `utils/` so nothing is rewritten for the final `dyno_app.py`.
+`hardware/`, `control/`, `gui/` and `utils/` so nothing is rewritten for the final
+`dyno_app.py`.
 
 The authoritative spec is `Manuals/Project overview.pdf` (tabs: Goals, Plan, Dyno side
 docs, MUT side docs). Read it before any non-trivial change.
@@ -45,6 +46,19 @@ hardware/             device-specific code (talks to or describes a device)
   c2000.py            C2000 driver class: run/stop/reset_fault/set_frequency/set_torque,
                       read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample
   encoder.py          ShaftSpeedEstimator: EncoderSample stream -> signed RPM (+ filtered)
+control/              dyno control logic: no Modbus details, no GUI code
+  torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> %, duration_s, PARAMS (GUI builds
+                      fields from them); Constant, Ramp, Step, LinearRpm; PROFILES list
+  runtime.py          DynoRuntime: worker thread owning the C2000; phases IDLE / ENTERING /
+                      RUNNING / STOPPING; callbacks on_sample / on_message / on_run_finished;
+                      Sample, RunResult dataclasses
+  run_log.py          RunLog: one CSV per run in logs/ (# header lines + COLUMNS)
+  validation.py       torque_error (estimate vs command in force = previous cycle), error_stats
+gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
+  trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh()
+  profile_editor.py   ProfileEditor: profile picker, fields generated from PARAMS
+  telemetry_panel.py  TelemetryPanel: label/value grid
+  dyno_window.py      DynoWindow + RuntimeBridge (runtime callbacks -> Qt signals)
 utils/                generic helpers, no hardware knowledge
   mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
   timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
@@ -52,38 +66,49 @@ utils/                generic helpers, no hardware knowledge
 test_01_vfd_core.py   Script 1: interactive C2000 control + telemetry menu
 test_02_encoder.py    Script 2: READ-ONLY encoder shaft-speed monitor (+ scale cross-check)
 test_03_coupled_torque.py  Script 3: staged coupled torque test (0 % → sign check → constant/ramp)
+test_04_torque_runtime.py  Script 4: GUI runtime test (profiles, live plots, CSV, torque validation)
+logs/                 CSV run logs (not tracked in git)
 Manuals/              datasheets + project overview (PDFs, not tracked in git)
 ```
 
 Layering rules (keep these when adding scripts):
-- Scripts own only UI and test-specific logic; anything a later script or the final
-  app will need goes into `hardware/` (device-specific) or `utils/` (generic). New
-  areas (control logic, data logging, GUI) get their own top-level folder only when
-  they are actually written — keep the structure generic and simple.
+- Scripts own only orchestration/UI and test-specific logic; anything a later script
+  or the final app will need goes into `hardware/` (device-specific), `control/` (dyno
+  logic), `gui/` (widgets) or `utils/` (generic). New areas get their own top-level
+  folder only when they are actually written — keep the structure generic and simple.
+- Once a DynoRuntime is started, only its worker thread touches the C2000. The GUI
+  only calls `start_run(profile)` / `request_stop()` and receives data via callbacks
+  (bridged to Qt signals); the loop never waits for the GUI.
+- Torque profiles return raw targets; the runtime clamps to the config limits and owns
+  slewing (enter profile / stop) at `TORQUE_SLEW_PCT_PER_S`.
 - Register addresses/encodings only in `registers.py` and `c2000.py`. Tunables only in
   `config.py`. Never hard-code a port, baud rate or register number in a script.
 - Library code **raises** on comm failure and **never prints**; scripts catch, log and
   decide (continue / retry / stop). Validation errors raise `ValueError`.
 - `mathutils.py` stays pure (no I/O) so it can be tested without hardware.
 - Test scripts and `dyno_app.py` stay in the repo root so `import config`,
-  `from hardware...` and `from utils...` work with no path setup (decided deliberately;
+  `from hardware...` etc. work with no path setup (decided deliberately;
   revisit only if the root gets crowded).
 
 ## Running
 
 ```
-source .venv/bin/activate        # Python 3.11, minimalmodbus 2.1.1, pyserial 3.5
-python test_01_vfd_core.py
+python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+python test_01_vfd_core.py       # Python 3.11; PySide6-Essentials + pyqtgraph for the GUI
 ```
 `config.PORT_NAME` is the macOS USB-RS485 adapter path; change it on another machine.
 No hardware is available to the assistant: verify changes by compiling and by driving
 scripts with a fake `minimalmodbus.Instrument` (patch the class, script reads, record
-writes), and ask the user to run on the rig.
+writes), and ask the user to run on the rig. For GUI scripts, run with
+`QT_QPA_PLATFORM=offscreen`, patch `C2000.connect` to return a fake drive object, and
+drive the window with `QTimer.singleShot` clicks; `window.grab().save(...)` gives a
+screenshot to check.
 
 ## Git
 
-Everything is tracked (including `.venv/`) except `__pycache__/`, `*.pyc`, `.DS_Store`
-and `Manuals/` (large PDFs, intentionally kept out of git). User-facing usage docs are
+Everything is tracked except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/` (recreate
+from `requirements.txt`; untracked once PySide6 made it ~400 MB), `logs/` and `Manuals/`
+(large PDFs). Keep `requirements.txt` updated whenever a package is installed. User-facing usage docs are
 in `README.md`; keep its script table in step with the plan.
 
 ## Plan status (from the overview's Plan tab)
@@ -94,17 +119,23 @@ in `README.md`; keep its script table in step with the plan.
 4. Encoder hardware + C2000 PG interface — DONE (4096 counts/rev verified).
 5. Script 2 encoder & shaft speed — DONE.
 6. C2000 configured for IM TQCPG (Pr.00-10 = 2, Pr.00-13 = 0, Pr.11-33 = 1).
-   **Script 3** `test_03_coupled_torque.py` is WRITTEN, not yet run on the rig. It is
+   **Script 3** `test_03_coupled_torque.py` — DONE, tested on the rig. It is
    deliberately atomic: no logging, plots, fault handling or new registers. Torque sign
    comes only from Pr.11-34 (RUN without FWD/REV bits). Script-level limits:
    MAX_TEST_TORQUE_PCT, SIGN_TEST_TORQUE_PCT, RAMP_RATE_PCT_PER_S. Fit the blue IM fan
    for any coupled test above 5 kW.
-7. Then in order: Script 4 `test_04_control_loop.py` (10 Hz loop, limits, CSV logging,
-   comm-error handling, ramp-to-zero before STOP, loop timing), Script 5
-   `test_05_torque_validation.py` (estimated actual torque, T = P/ω cross-check),
-   Script 6 `test_06_profiles.py` (Modes A/B: constant, T=mω+c, T=k/ω, step,
-   polynomial in ω or t), Script 7 `test_07_drivecycle.py` (Mode C road-load).
-8. Final GUI `dyno_app.py` only after 1–7 are proven; it must only integrate proven code.
+7. **Script 4** `test_04_torque_runtime.py` — WRITTEN (offline-tested with a fake drive),
+   not yet run on the rig. It merges the originally planned runtime-loop, torque-profile
+   and torque-feedback-validation scripts: control/ runtime + profiles + CSV + validation,
+   gui/ widgets. Shutdown triggers: Stop, profile end, |RPM| > MAX_ABS_RPM, RPM <
+   MIN_RUN_RPM, implausible encoder, MAX_CONSECUTIVE_COMM_ERRORS. Validation statistics
+   are only bias, MAE and max |error| (user asked for nothing more).
+   **OPEN: the loop must reach 10 Hz.** Existing reads cost ~12 Modbus transactions per
+   cycle (read_telemetry 9 + encoder 2 + torque write 1), likely 120-240 ms. Parked by
+   the user; check logged loop_dt on the rig, then fix with contiguous block reads.
+8. Next: drivecycle / road-load simulation (Mode C) as a profile that plugs into the
+   same runtime. Polynomial (Mode B) and T = k/ω profiles are not written yet.
+9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
 
 ## Operating rules the software must respect
 

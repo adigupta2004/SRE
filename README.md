@@ -8,21 +8,20 @@ Baumer encoder on the dyno shaft provides signed shaft speed.
 
 The final application (`dyno_app.py`, a GUI with torque-profile, custom-function and
 drivecycle modes) is being built step by step: each `test_XX_*.py` script proves one
-part of it on the real hardware, and all of them share the code in `hardware/` and
-`utils/`.
+part of it on the real hardware, and all of them share the code in `hardware/`,
+`control/`, `gui/` and `utils/`.
 
 ## Setup
 
-1. **Python environment** — the repo includes a Python 3.11 virtual environment:
-   ```
-   source .venv/bin/activate
-   ```
-   On a new machine, create one instead:
+1. **Python environment** — create a Python 3.11 virtual environment (it is not
+   stored in git) and install the dependencies, including PySide6 and pyqtgraph for
+   the GUI:
    ```
    python3.11 -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
+   Afterwards, just `source .venv/bin/activate` before running a script.
 2. **RS-485 link** — connect the USB-RS485 adapter A+ → C2000 SG+, B− → SG−, with the
    C2000's 485 termination switch at "120" and a 120 Ω resistor across A+/B− at the
    adapter end (twisted pair).
@@ -32,8 +31,8 @@ part of it on the real hardware, and all of them share the code in `hardware/` a
    Pr.09-00 = 1 (address), Pr.09-01 = 38.4 kbps, Pr.09-04 = 14 (8,E,1 RTU),
    Pr.09-30 = 0. The full parameter list is in the project overview document.
 
-Scripts live in the repository root, so imports from `hardware/` and `utils/` work
-without any setup.
+Scripts live in the repository root, so imports from `hardware/`, `control/`, `gui/`
+and `utils/` work without any setup.
 
 ## Scripts
 
@@ -41,8 +40,9 @@ without any setup.
 |---|---|---|
 | `test_01_vfd_core.py` | Done (speed control) | Interactive menu: RUN / STOP / fault reset, speed (Hz) or torque (%) target, telemetry readout. The control mode chosen in the script must match Pr.00-10 on the keypad. |
 | `test_02_encoder.py` | Done | **Read-only** shaft-speed monitor: live signed RPM from the encoder, compared with the C2000's own estimate. Mode 1 also checks the encoder scaling while you turn the shaft slowly by hand. Never sends commands to the drive. |
-| `test_03_coupled_torque.py` | Written, to be run on the rig | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
-| `test_04` … `test_07` | Planned | Control loop + logging, torque validation, torque profiles, drivecycle simulation |
+| `test_03_coupled_torque.py` | Done | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
+| `test_04_torque_runtime.py` | Written, to be run on the rig | GUI test of the reusable ~10 Hz runtime: choose a torque profile (constant, ramp, step, linear vs RPM), Start → 0 % + RUN → slew into the profile → run with live torque and speed plots → Stop or profile end → ramp to 0 %, write 0 %, STOP. Writes one CSV per run to `logs/` and shows commanded vs C2000-estimated torque, the error plot and bias / MAE / max error. Limits are in `config.py` (COMMISSIONING LIMITS). |
+| `test_05_…` | Planned | Drivecycle / road-load simulation |
 | `dyno_app.py` | Planned | Final GUI |
 
 Example:
@@ -50,7 +50,8 @@ Example:
 python test_02_encoder.py
 ```
 Press Ctrl+C to stop a monitoring script; `q` quits the Script 1 menu. In Script 3,
-Enter leaves a live display and Ctrl+C is a controlled shutdown.
+Enter leaves a live display and Ctrl+C is a controlled shutdown. Script 4 opens a
+window; closing it (or Ctrl+C in the terminal) stops any active run first.
 
 ## Safety
 
@@ -71,17 +72,27 @@ hardware/          everything that talks to or describes a device
   registers.py     C2000 Modbus register addresses and command words
   c2000.py         C2000 driver: run/stop/reset, speed and torque targets, telemetry
   encoder.py       signed shaft RPM from the encoder position counter
+control/           dyno control logic, no Modbus and no GUI code
+  torque_profiles.py   torque target vs time and RPM (constant, ramp, step, linear vs RPM)
+  runtime.py       the ~10 Hz read -> profile -> limits -> command -> log loop (worker thread)
+  run_log.py       one CSV file per run in logs/
+  validation.py    commanded vs estimated torque error: bias, MAE, max error
+gui/               reusable PySide6 + pyqtgraph widgets; never talks to the hardware
+  trace_plot.py    named traces, legend, show/hide, autoscale, clear
+  profile_editor.py    profile picker with fields generated from each profile
+  telemetry_panel.py   live label/value grid
+  dyno_window.py   main window for running profiles
 utils/             generic helpers with no hardware knowledge
   mathutils.py     counter arithmetic, unit conversion, low-pass filter
   timing.py        fixed-rate loop timing
   console.py       terminal display helpers (banners, status line, menus)
 test_XX_*.py       step-by-step hardware test scripts
+logs/              CSV run logs (kept out of git)
 Manuals/           datasheets and project overview (kept out of git)
 ```
 
 To add a new script: put anything the final application will also need into
-`hardware/` (device-specific) or `utils/` (generic), and keep only the test-specific
-menus and checks in the script. New areas such as control logic or the GUI get their
-own folder when they are written. Settings belong in
+`hardware/` (device-specific), `control/` (dyno logic), `gui/` (widgets) or `utils/`
+(generic), and keep only the test-specific orchestration in the script. Settings belong in
 `config.py` and register numbers in `registers.py`; scripts should not hard-code
 either. See [CLAUDE.md](CLAUDE.md) for the full design notes and register details.

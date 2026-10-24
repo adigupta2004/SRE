@@ -46,3 +46,29 @@ MAX_PLAUSIBLE_RPM = 6000.0
 # Nominal sample/control rate (project spec: ~100 ms per cycle). The actual dt
 # is always measured, never assumed.
 LOOP_RATE_HZ = 10.0
+
+# Torque slew rate used to enter a profile from 0 % and to ramp back to 0 % on stop.
+TORQUE_SLEW_PCT_PER_S = 2.0
+
+# Consecutive failed cycles (comm errors) tolerated during a run before a
+# controlled shutdown is started.
+MAX_CONSECUTIVE_COMM_ERRORS = 3
+
+# CSV run logs are written here (one file per run).
+LOG_DIR = "logs"
+
+# ==============================================================================
+# COMMISSIONING LIMITS (runtime)
+# ==============================================================================
+# Every torque command is clamped to [MIN, MAX] (% of Pr.11-27). With the MUT
+# running forward, negative torque opposes it; MAX = 0 forbids assisting torque.
+TORQUE_LIMIT_MIN_PCT = -10.0
+TORQUE_LIMIT_MAX_PCT = 0.0
+
+# Controlled shutdown if |encoder RPM| exceeds this (MUT rated 2940 rpm).
+MAX_ABS_RPM = 2940.0
+
+# A run needs the MUT driving the shaft forward: it will not start below this
+# encoder RPM, and shuts down if speed falls below it while torque is applied
+# (opposing torque on an undriven shaft would spin it backwards).
+MIN_RUN_RPM = 100.0

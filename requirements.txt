@@ -1,2 +1,4 @@
 minimalmodbus
 pyserial
+PySide6-Essentials
+pyqtgraph
