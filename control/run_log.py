@@ -18,13 +18,13 @@ COLUMNS = [
     "cycle_time",            # s spent doing this cycle's work (> period = overrun)
     "phase",                 # ENTERING / RUNNING / STOPPING
     "profile_time",          # s since the profile started (blank outside RUNNING)
-    "profile_target_pct",    # raw profile target before limits (blank outside RUNNING)
-    "torque_command_pct",    # torque in force on Pr.11-34 after this cycle's write (last accepted)
+    "profile_target_nm",     # raw profile target before limits (blank outside ENTERING/RUNNING)
+    "torque_command_nm",     # torque in force after this cycle's write (last accepted, after 0.1 % rounding)
     "limited",               # 1 if the target was clamped to the torque limits
     "encoder_rpm",
     "filtered_rpm",
     "c2000_rpm",
-    "torque_estimate_pct",
+    "torque_estimate_nm",    # 2208H converted with the motor rated torque
     "current_a",
     "output_power_kw",
     "dc_bus_v",
@@ -52,10 +52,13 @@ class RunLog:
         for line in (
             f"Dyno run log - started {now:%Y-%m-%d %H:%M:%S}",
             f"Profile: {profile.describe()}",
-            f"Torque limits: {config.TORQUE_LIMIT_MIN_PCT:g} .. {config.TORQUE_LIMIT_MAX_PCT:g} % "
+            f"Torque limits: {config.TORQUE_LIMIT_MIN_NM:.2f} .. {config.TORQUE_LIMIT_MAX_NM:.2f} Nm "
             f"| Max |rpm|: {config.MAX_ABS_RPM:g} | Min run rpm: {config.MIN_RUN_RPM:g} "
-            f"| Slew: {config.TORQUE_SLEW_PCT_PER_S:g} %/s | Loop: {config.LOOP_RATE_HZ:g} Hz",
-            "Units: time s, torque % of Pr.11-27 (signed), rpm signed (+ = forward), "
+            f"| Slew: {config.TORQUE_SLEW_NM_PER_S:g} Nm/s | Loop: {config.LOOP_RATE_HZ:g} Hz",
+            f"Torque scaling: Pr.11-27 = {config.PR_11_27_PCT:g} % "
+            f"| command 100 % (Pr.11-34) = {config.TORQUE_REFERENCE_NM:.2f} Nm "
+            f"| estimate 100 % (2208H) = motor rated torque = {config.MOTOR_RATED_TORQUE_NM:.2f} Nm",
+            "Units: time s; torque Nm (signed); rpm signed (+ = forward); "
             "power kW (negative = regenerating)",
         ):
             self._file.write(f"# {line}\n")

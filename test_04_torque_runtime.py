@@ -12,9 +12,10 @@ Purpose:  prove the reusable ~10 Hz runtime (control/runtime.py), torque profile
 This script only wires the pieces together:
     C2000 (hardware) -> DynoRuntime (control) -> DynoWindow (gui)
 
-Flow: connect -> 0 % + STOP -> start the MUT forward and watch the live RPM ->
-choose a profile -> Start (0 % + RUN, slew into the profile) -> run until Stop
-or profile end -> ramp to 0 %, write 0 %, STOP -> results shown in the window.
+Flow: connect -> 0 N·m + STOP -> check C2000 torque settings matches config (torque scaling)
+-> start the MUT forward and watch the live RPM -> choose a profile -> Start
+(0 N·m + RUN, slew into the profile) -> run until Stop or profile end -> ramp to
+0, write 0 N·m, STOP -> results shown in the window. Torque is in N·m throughout.
 Limits are in config.py (COMMISSIONING LIMITS). Ctrl+C closes the window,
 which stops any active run through the same shutdown path.
 """
@@ -37,9 +38,9 @@ def main():
     banner(
         "Torque Runtime & Validation Test (Script 04)",
         comms.describe_link(),
-        f"Loop {config.LOOP_RATE_HZ:g} Hz | Torque {config.TORQUE_LIMIT_MIN_PCT:g} .. "
-        f"{config.TORQUE_LIMIT_MAX_PCT:g} % | |RPM| <= {config.MAX_ABS_RPM:g} | "
-        f"Slew {config.TORQUE_SLEW_PCT_PER_S:g} %/s",
+        f"Loop {config.LOOP_RATE_HZ:g} Hz | Torque {config.TORQUE_LIMIT_MIN_NM:.2f} .. "
+        f"{config.TORQUE_LIMIT_MAX_NM:.2f} N·m | |RPM| <= {config.MAX_ABS_RPM:g} | "
+        f"Slew {config.TORQUE_SLEW_NM_PER_S:g} N·m/s",
     )
 
     try:
@@ -54,12 +55,14 @@ def main():
     window = DynoWindow(runtime)             # connects the runtime's callbacks to the GUI
 
     try:
-        runtime.start()                      # 0 % + STOP, then IDLE monitoring
+        runtime.start()                      # 0 N·m + STOP, scaling check, then IDLE monitoring
     except Exception as e:
-        print(f"[ERROR] Could not command 0% / STOP: {e}")
+        print(f"[ERROR] Runtime not started: {e}")
         vfd.close()
         return 1
-    print("[VFD] 0% torque and STOP sent. Start the MUT forward, then use the window.")
+    print(f"[VFD] 0 N·m and STOP sent. Torque scaling verified: Pr.05-02 = {config.MOTOR_RATED_POWER_KW:g} kW, "
+          f"Pr.05-03 = {config.MOTOR_RATED_RPM:g} rpm, Pr.11-27 = {config.PR_11_27_PCT:g} %.")
+    print("[VFD] Start the MUT forward, then use the window.")
 
     # Ctrl+C in the terminal -> close the window -> controlled shutdown.
     # Python only runs signal handlers when it gets control back, and Qt's event loop

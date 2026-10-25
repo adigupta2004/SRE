@@ -43,6 +43,16 @@ REG_TORQUE_TARGET = param_address(11, 34)   # 0x0B22
 TORQUE_CMD_MIN_PCT = -100.0
 TORQUE_CMD_MAX_PCT = 100.0
 
+# Pr.11-27 Maximum torque command, 0..500 % of motor rated torque (integer %).
+# It is the 100 % base of Pr.11-34, so it fixes the command's N·m scaling.
+REG_MAX_TORQUE_CMD = param_address(11, 27)  # 0x0B1B
+
+# Induction motor 1 rated power and speed (set by the vendor). The drive's motor
+# rated torque = Pr.05-02 / (Pr.05-03 * 2*pi/60) (manual, Pr.11-34) is the 100 %
+# base of Pr.11-27 and of the 2208H estimate.
+REG_MOTOR_RATED_POWER = param_address(5, 2)  # 0x0502  0.01 kW
+REG_MOTOR_RATED_RPM = param_address(5, 3)    # 0x0503  rpm
+
 # ==============================================================================
 # STATUS / TELEMETRY REGISTERS (21xx, 22xx, read-only)
 # ==============================================================================
@@ -66,7 +76,8 @@ REG_OUTPUT_POWER = 0x2206      # 8710  output power, signed, 0.1 kW
 REG_MOTOR_SPEED = 0x2207       # 8711 motor speed from VFD's calculation, rpm (unsigned)
                                # When sensorless it is estimated from speeds, when TQCPG 
                                # it is probably from encoder itself.
-REG_OUTPUT_TORQUE = 0x2208     # 8712  estimated output torque, signed, 0.1 %
+REG_OUTPUT_TORQUE = 0x2208     # 8712  estimated output torque, signed, 0.1 % of MOTOR RATED
+                               # torque (not of Pr.11-27 like the command; manual Pr.00-04 = 8)
 REG_PG_FEEDBACK = 0x2209       # 8713  PG feedback, 0..4095 per mechanical rev
 REG_POS_LOW = 0x222C           # 8748  motor actual position, low word
 REG_POS_HIGH = 0x222D          # 8749  motor actual position, high word

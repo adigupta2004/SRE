@@ -89,7 +89,7 @@ class DynoWindow(QMainWindow):
         self._messages.setMaximumBlockCount(500)
 
         limits = QLabel(
-            f"Limits: torque {config.TORQUE_LIMIT_MIN_PCT:g} .. {config.TORQUE_LIMIT_MAX_PCT:g} % | "
+            f"Limits: torque {config.TORQUE_LIMIT_MIN_NM:.2f} .. {config.TORQUE_LIMIT_MAX_NM:.2f} N·m | "
             f"|RPM| <= {config.MAX_ABS_RPM:g} | RPM >= {config.MIN_RUN_RPM:g} while running"
         )
         limits.setWordWrap(True)
@@ -105,7 +105,7 @@ class DynoWindow(QMainWindow):
         left_layout.addWidget(self._messages, stretch=1)
 
         # ---- Right: live and result plots ----
-        self._torque_plot = TracePlot("Torque", "time (s)", "torque (%)")
+        self._torque_plot = TracePlot("Torque", "time (s)", "torque (N·m)")
         self._torque_plot.add_trace("Command")
         self._torque_plot.add_trace("C2000 estimate")
         self._speed_plot = TracePlot("Speed", "time (s)", "speed (rpm)")
@@ -118,10 +118,10 @@ class DynoWindow(QMainWindow):
 
         self._summary = QLabel("No run yet.")
         self._summary.setWordWrap(True)
-        self._compare_plot = TracePlot("Torque comparison", "time (s)", "torque (%)")
+        self._compare_plot = TracePlot("Torque comparison", "time (s)", "torque (N·m)")
         self._compare_plot.add_trace("Command")
         self._compare_plot.add_trace("C2000 estimate")
-        self._error_plot = TracePlot("Torque error (estimate - command)", "time (s)", "error (%)")
+        self._error_plot = TracePlot("Torque error (estimate - command)", "time (s)", "error (N·m)")
         self._error_plot.add_trace("Error", color="#d62728")
         results = QWidget()
         results_layout = QVBoxLayout(results)
@@ -184,8 +184,8 @@ class DynoWindow(QMainWindow):
         self._update_buttons()
 
         if s.phase != IDLE:
-            self._torque_plot.append("Command", s.elapsed_time, s.torque_command_pct)
-            self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_estimate_pct)
+            self._torque_plot.append("Command", s.elapsed_time, s.torque_command_nm)
+            self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_estimate_nm)
             self._speed_plot.append("Encoder RPM", s.elapsed_time, s.encoder_rpm)
             self._speed_plot.append("C2000 RPM", s.elapsed_time, s.c2000_rpm)
 
@@ -194,8 +194,8 @@ class DynoWindow(QMainWindow):
             "drive_state": s.drive_state,
             "encoder_rpm": fmt(s.encoder_rpm, "+.1f", " rpm"),
             "c2000_rpm": fmt(s.c2000_rpm, "d", " rpm"),
-            "torque_command": fmt(s.torque_command_pct, "+.1f", " %") + (" (limited)" if s.limited else ""),
-            "torque_estimate": fmt(s.torque_estimate_pct, "+.1f", " %"),
+            "torque_command": fmt(s.torque_command_nm, "+.2f", " N·m") + (" (limited)" if s.limited else ""),
+            "torque_estimate": fmt(s.torque_estimate_nm, "+.2f", " N·m"),
             "current": fmt(s.current_a, ".2f", " A"),
             "power": fmt(s.output_power_kw, "+.1f", " kW"),
             "dc_bus": fmt(s.dc_bus_v, ".1f", " V"),
@@ -210,8 +210,8 @@ class DynoWindow(QMainWindow):
         self._telemetry.set_values({"phase": IDLE})
         times = [s.elapsed_time for s in r.samples]
         self._compare_plot.clear()
-        self._compare_plot.set_data("Command", times, [s.torque_command_pct for s in r.samples])
-        self._compare_plot.set_data("C2000 estimate", times, [s.torque_estimate_pct for s in r.samples])
+        self._compare_plot.set_data("Command", times, [s.torque_command_nm for s in r.samples])
+        self._compare_plot.set_data("C2000 estimate", times, [s.torque_estimate_nm for s in r.samples])
         self._error_plot.clear()
         self._error_plot.set_data("Error", r.error_times, r.errors)
         self._compare_plot.refresh()
@@ -219,9 +219,9 @@ class DynoWindow(QMainWindow):
 
         loop_hz = 1.0 / r.mean_loop_dt if r.mean_loop_dt else 0.0
         if r.stats:
-            stats = (f"<b>Bias (mean error):</b> {r.stats.bias:+.2f} % &nbsp; "
-                     f"<b>Mean absolute error:</b> {r.stats.mae:.2f} % &nbsp; "
-                     f"<b>Max absolute error:</b> {r.stats.max_abs:.2f} % &nbsp; ({r.stats.n} samples)")
+            stats = (f"<b>Bias (mean error):</b> {r.stats.bias:+.2f} N·m &nbsp; "
+                     f"<b>Mean absolute error:</b> {r.stats.mae:.2f} N·m &nbsp; "
+                     f"<b>Max absolute error:</b> {r.stats.max_abs:.2f} N·m &nbsp; ({r.stats.n} samples)")
         else:
             stats = "<b>No RUNNING-phase data</b> - statistics not available."
         self._summary.setText(

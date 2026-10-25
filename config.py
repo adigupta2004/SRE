@@ -6,6 +6,8 @@ facts (register addresses, command words, parameter ranges) live in
 hardware/registers.py.
 """
 
+import math
+
 import serial
 
 # ==============================================================================
@@ -47,8 +49,9 @@ MAX_PLAUSIBLE_RPM = 6000.0
 # is always measured, never assumed.
 LOOP_RATE_HZ = 10.0
 
-# Torque slew rate used to enter a profile from 0 % and to ramp back to 0 % on stop.
-TORQUE_SLEW_PCT_PER_S = 2.0
+# Torque slew rate used to enter a profile from 0 and to ramp back to 0 on stop.
+# 5 N·m/s: full scale (35.56 N·m) in ~7 s, 0.5 N·m per cycle at 10 Hz.
+TORQUE_SLEW_NM_PER_S = 5.0
 
 # Consecutive failed cycles (comm errors) tolerated during a run before a
 # controlled shutdown is started.
@@ -60,15 +63,26 @@ LOG_DIR = "logs"
 # ==============================================================================
 # COMMISSIONING LIMITS (runtime)
 # ==============================================================================
-# Every torque command is clamped to [MIN, MAX] (% of Pr.11-27)
-# Pr.11-27 is set to 36%, ie the max commandable torque is 36% of rated dyno 
-# motor torque, ie 36% of (30kW/2900rpm) which is 35.6 Nm. See reason in documentation). 
-# Hence, this percentage is a percentage of 35.6 Nm, which is the max allowed operating
-# torque of our coupled system.
+# Torque scaling, from the dyno motor nameplate (30 kW, 2900 rpm -> 98.79 N·m rated).
+# Pr.11-27 is set to 36 %, ie the max commandable torque is 36 % of rated dyno motor
+# torque = 35.56 N·m - the max allowed operating torque of our coupled system (see
+# reason in documentation).
+# The two C2000 torque registers use different bases:
+#   Pr.11-34 (command)  % of Pr.11-27:          100 % = TORQUE_REFERENCE_NM
+#   2208H    (estimate) % of motor rated torque: 100 % = MOTOR_RATED_TORQUE_NM
+# All torque above the drive (profiles, limits, logs, GUI) is in N·m.
+# PR_11_27_PCT must match the drive: the runtime reads Pr.11-27 and refuses to start otherwise.
+MOTOR_RATED_POWER_KW = 30.0
+MOTOR_RATED_RPM = 2900.0
+PR_11_27_PCT = 36.0
+# Derived - do not edit:
+MOTOR_RATED_TORQUE_NM = MOTOR_RATED_POWER_KW * 1000.0 / (2.0 * math.pi * MOTOR_RATED_RPM / 60.0)  # 98.79
+TORQUE_REFERENCE_NM = MOTOR_RATED_TORQUE_NM * PR_11_27_PCT / 100.0                                # 35.56
+
+# Every torque command is clamped to [MIN, MAX] N·m.
 # With the MUT running forward, negative torque opposes it; MAX = 0 forbids assisting torque.
-TORQUE_REFERENCE_NM = 35.6
-TORQUE_LIMIT_MIN_PCT = -100.0
-TORQUE_LIMIT_MAX_PCT = 0.0
+TORQUE_LIMIT_MIN_NM = -TORQUE_REFERENCE_NM
+TORQUE_LIMIT_MAX_NM = 0.0
 
 # Controlled shutdown if |encoder RPM| exceeds this (dyno IM rated 2900 rpm, MUT 
 # rated 2940 rpm).

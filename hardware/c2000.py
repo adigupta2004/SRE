@@ -32,13 +32,18 @@ class Telemetry:
     motor_rpm: int          # 2207H, unsigned magnitude (sensorless estimate)
     dc_bus_v: float
     output_power_kw: float  # 2206H, signed (negative = regenerating)
-    torque_pct: float       # 2208H, signed
+    torque_pct: float       # 2208H, signed, % of motor rated torque
     current_a: float
     status_word: int        # raw 2101H
 
     @property
     def state(self):
         return reg.DRIVE_STATE_NAMES.get(self.status_word & reg.STATUS_STATE_MASK, "Unknown")
+
+    @property
+    def torque_nm(self):
+        """2208H in N·m (its 100 % is the motor rated torque, not Pr.11-27)."""
+        return self.torque_pct / 100.0 * config.MOTOR_RATED_TORQUE_NM
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,41 @@ class C2000:
                 f"and {reg.TORQUE_CMD_MAX_PCT:+.1f}%."
             )
         self._write(reg.REG_TORQUE_TARGET, pct, decimals=1, signed=True)
+
+    def set_torque_nm(self, nm):
+        """
+        Writes a torque command in N·m: converted to Pr.11-34 (% of Pr.11-27,
+        100 % = config.TORQUE_REFERENCE_NM) and rounded to its 0.1 % resolution
+        (~0.036 N·m). Returns the N·m actually commanded after that rounding.
+        """
+        pct = round(nm / config.TORQUE_REFERENCE_NM * 100.0, 1) + 0.0     # + 0.0: -0.0 -> 0.0
+        self.set_torque(pct)
+        return pct / 100.0 * config.TORQUE_REFERENCE_NM
+
+    def verify_torque_scaling(self):
+        """
+        Raises ValueError unless the drive parameters that define the N·m scaling
+        match config: Pr.05-02 / Pr.05-03 (motor rated power / speed -> rated
+        torque, the 100 % of 2208H) and Pr.11-27 (the 100 % of the Pr.11-34
+        command). A mismatch would make every N·m command and reading silently
+        wrong. All mismatches are listed in one message.
+        """
+        checks = [
+            ("Pr.05-02 motor rated power", self._read(reg.REG_MOTOR_RATED_POWER, decimals=2),
+             "MOTOR_RATED_POWER_KW", config.MOTOR_RATED_POWER_KW, "kW"),
+            ("Pr.05-03 motor rated speed", self._read(reg.REG_MOTOR_RATED_RPM),
+             "MOTOR_RATED_RPM", config.MOTOR_RATED_RPM, "rpm"),
+            ("Pr.11-27 max torque command", self._read(reg.REG_MAX_TORQUE_CMD),
+             "PR_11_27_PCT", config.PR_11_27_PCT, "%"),
+        ]
+        mismatches = [
+            f"{name}: drive {actual:g} {unit}, config.{key} {expected:g} {unit}"
+            for name, actual, key, expected, unit in checks
+            if abs(actual - expected) > 0.005          # 0.01 kW is the finest register step
+        ]
+        if mismatches:
+            raise ValueError("Torque scaling mismatch - fix the drive or config.py before running. "
+                             + "; ".join(mismatches))
 
     # --------------------------------------------------------------------------
     # Reads

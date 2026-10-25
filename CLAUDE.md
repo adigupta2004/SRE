@@ -34,7 +34,10 @@ PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
   unused). Older doc sections that say "Shakti VFD" refer to this MUT drive.
 - The 30 kW dyno motor's nameplate is not in the repo (vendor set Pr.01-01, 01-02,
   05-01..05-09). Rated torque [N·m] = Pr.05-02 [kW]·1000 / (2π·Pr.05-03 [rpm]/60) — read the params from the
-  drive (Modbus address 0x05nn) if Nm conversions are needed.
+  drive (Modbus address 0x05nn) to confirm. config.py holds the torque scaling:
+  nameplate MOTOR_RATED_POWER_KW = 30 / MOTOR_RATED_RPM = 2900 and PR_11_27_PCT = 36 are
+  the inputs; MOTOR_RATED_TORQUE_NM (98.79, 100 % of 2208H) and TORQUE_REFERENCE_NM
+  (35.56, 100 % of Pr.11-34) are derived. 2227H (torque in N·m) was rejected: integer N·m.
 
 ## Code layout
 
@@ -47,7 +50,7 @@ hardware/             device-specific code (talks to or describes a device)
                       read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample
   encoder.py          ShaftSpeedEstimator: EncoderSample stream -> signed RPM (+ filtered)
 control/              dyno control logic: no Modbus details, no GUI code
-  torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> %, duration_s, PARAMS (GUI builds
+  torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> N·m, duration_s, PARAMS (GUI builds
                       fields from them); Constant, Ramp, Step, LinearRpm; PROFILES list
   runtime.py          DynoRuntime: worker thread owning the C2000; phases IDLE / ENTERING /
                       RUNNING / STOPPING; callbacks on_sample / on_message / on_run_finished;
@@ -80,7 +83,9 @@ Layering rules (keep these when adding scripts):
   only calls `start_run(profile, save_log)` / `request_stop()` and receives data via callbacks
   (bridged to Qt signals); the loop never waits for the GUI.
 - Torque profiles return raw targets; the runtime clamps to the config limits and owns
-  slewing (enter profile / stop) at `TORQUE_SLEW_PCT_PER_S`.
+  slewing (enter profile / stop) at `TORQUE_SLEW_NM_PER_S`.
+- Torque is N·m everywhere above the drive (profiles, runtime, CSV, GUI); % exists only
+  in `c2000.py` (`set_torque_nm`, `Telemetry.torque_nm`). Scripts 1 and 3 still use %.
 - Register addresses/encodings only in `registers.py` and `c2000.py`. Tunables only in
   `config.py`. Never hard-code a port, baud rate or register number in a script.
 - Library code **raises** on comm failure and **never prints**; scripts catch, log and
@@ -159,7 +164,13 @@ in `README.md`; keep its script table in step with the plan.
   command (0.01 Hz, magnitude only — direction comes from 2000H). 2002H bit1 = reset.
 - 2207H motor speed is **unsigned** and unreliable (drops to 0 on STOP) — comparison only.
 - 2200H output current: decimal places are in the **high byte of 211FH**.
-- 2208H output torque %: signed. 2101H bits 1-0: Stopped/Decelerating/Standby/Operating.
+- 2208H output torque: signed, 0.1 % of **motor rated torque** — NOT of Pr.11-27 like the
+  command (manual, Pr.00-04 = 8). With Pr.11-27 = 36 %, a −50 % command reads ≈ −18 %.
+  Compare command and estimate only after converting both to N·m.
+- Pr.11-27 (max torque command, integer % of rated) = 0x0B1B; Pr.05-02 (motor 1 rated
+  power, 0.01 kW) = 0x0502; Pr.05-03 (motor 1 rated speed, rpm) = 0x0503. Drive's rated
+  torque = Pr.05-02 / (Pr.05-03·2π/60) (manual, Pr.11-34). All three are compared with
+  config by `C2000.verify_torque_scaling()`, called from `DynoRuntime.start()`. 2101H bits 1-0: Stopped/Decelerating/Standby/Operating.
 - 2206H output power (0.1 kW) is **signed** — negative when regenerating (seen in
   Script 3: read unsigned, −0.1 kW appeared as 6553.5 kW). Light regen reads ~0 kW
   because the regenerated power only just covers motor losses.
