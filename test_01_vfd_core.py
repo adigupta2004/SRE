@@ -24,14 +24,14 @@ from utils.console import banner, menu, rule
 def target_hint(control_mode):
     if control_mode == "SPEED":
         return "(Signed Hz: +FWD / -REV)"
-    return "(Signed % Torque Command: +FWD / -REV)"
+    return "(Signed torque command, % of Pr.11-27: +FWD / -REV)"
 
 
 def print_telemetry(tel):
     rule()
     print(f" Target Freq: {tel.freq_cmd_hz:6.2f} Hz | Actual Output Freq: {tel.output_freq_hz:6.2f} Hz "
           f"| Estimated Motor Speed: {tel.motor_rpm:5d} rpm")
-    print(f" Torque: {tel.torque_pct:6.1f} %       | Status: {tel.state:<13}")
+    print(f" Torque: {tel.torque_pct:6.1f} % of motor rated (2208H estimate) | Status: {tel.state:<13}")
     print(f" DC Bus: {tel.dc_bus_v:6.1f} V       | Current: {tel.current_a:7.2f} A            "
           f"| Power: {tel.output_power_kw:6.1f} kW")
     rule()
@@ -92,7 +92,7 @@ def main():
                         except ValueError as e:
                             print(f"[ERROR] {e}")
                             continue
-                        print(f"[VFD] Torque Command set to {val:.1f}%")
+                        print(f"[VFD] Torque Command set to {val:.1f}% of Pr.11-27")
 
                 elif choice == "3":
                     if control_mode == "SPEED":

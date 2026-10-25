@@ -15,14 +15,28 @@ from dataclasses import dataclass
 import config
 from hardware import comms
 from hardware import registers as reg
-from utils.mathutils import combine_words
+from utils.mathutils import combine_words, to_signed16
 
-POS_WORD_COUNT = reg.REG_POS_HIGH - reg.REG_POS_LOW + 1    # 2 words, one transaction
+# Block reads. Each Modbus transaction costs ~20 ms whatever its size (C2000 RTU
+# frames are delimited by >= 10 ms silent intervals, plus the Pr.09-09 response
+# delay), so contiguous registers are read together. The manual does not state the
+# maximum registers per read clearly ("n <= 16" data); 10-word reads are verified on
+# the rig (2026-10-25).
+POS_WORD_COUNT = reg.REG_POS_HIGH - reg.REG_POS_LOW + 1    # 222CH..222DH, 2 words
 
-# 2207H..2209H are contiguous, so C2000 RPM and PG feedback come from one
-# transaction. 2208H (output torque) is read as a side effect and ignored.
+# 2207H..2209H: C2000 RPM and PG feedback for read_encoder_sample(). 2208H (output
+# torque) is read as a side effect and ignored.
 MONITOR_BLOCK_START = reg.REG_MOTOR_SPEED
-MONITOR_BLOCK_COUNT = reg.REG_PG_FEEDBACK - reg.REG_MOTOR_SPEED + 1   # 3 words
+MONITOR_BLOCK_COUNT = reg.REG_PG_FEEDBACK - reg.REG_MOTOR_SPEED + 1    # 3 words
+
+# 2101H..2103H: drive status, frequency command, output frequency.
+STATUS_BLOCK_START = reg.REG_DRIVE_STATUS
+STATUS_BLOCK_COUNT = reg.REG_OUTPUT_FREQ - reg.REG_DRIVE_STATUS + 1    # 3 words
+
+# 2200H..2209H: current, DC bus, output power, C2000 RPM, output torque, PG feedback
+# (2201H, 2202H, 2204H and 2205H come along unused).
+DRIVE_BLOCK_START = reg.REG_OUTPUT_CURR
+DRIVE_BLOCK_COUNT = reg.REG_PG_FEEDBACK - reg.REG_OUTPUT_CURR + 1      # 10 words
 
 
 @dataclass(frozen=True)
@@ -49,9 +63,7 @@ class Telemetry:
 @dataclass(frozen=True)
 class EncoderSample:
     t: float                # monotonic time at the midpoint of the position read
-    pos_low: int            # 222CH raw
-    pos_high: int           # 222DH raw
-    pos_raw: int            # unsigned 32-bit combined position
+    pos_raw: int            # 222CH (low) / 222DH (high) combined: unsigned 32-bit position
     pg: int                 # 2209H, 0..4095 per rev
     c2000_rpm: int          # 2207H, unsigned (comparison only)
 
@@ -59,6 +71,7 @@ class EncoderSample:
 class C2000:
     def __init__(self, instrument):
         self.instrument = instrument
+        self._current_divisor = None    # 10 ** (2200H decimal places), read once from 211FH
 
     @classmethod
     def connect(cls, port=config.PORT_NAME, slave_address=config.SLAVE_ADDRESS):
@@ -79,6 +92,11 @@ class C2000:
         return self.instrument.read_register(
             address, number_of_decimals=decimals, functioncode=3, signed=signed
         )
+
+    def _read_block(self, start, count):
+        """Reads count contiguous registers in one transaction: {address: unsigned raw word}."""
+        words = self.instrument.read_registers(start, count, functioncode=3)
+        return dict(zip(range(start, start + count), words))
 
     # --------------------------------------------------------------------------
     # Commands
@@ -154,48 +172,72 @@ class C2000:
     # --------------------------------------------------------------------------
     # Reads
     # --------------------------------------------------------------------------
-    def read_output_current(self):
-        """Output current in A. 2200H's decimal position is in the high byte of 211FH."""
-        raw_current = self._read(reg.REG_OUTPUT_CURR)
-        decimal_places = (self._read(reg.REG_CURRENT_DECIMAL) >> 8) & 0xFF
-        return raw_current / (10 ** decimal_places)
+    def read_cycle(self):
+        """
+        Everything the runtime needs per cycle in three transactions: encoder
+        position, the 2200H..2209H block and the 2101H..2103H block.
+        Returns (EncoderSample, Telemetry).
+        """
+        t, pos_raw = self._read_position()
+        drive = self._read_block(DRIVE_BLOCK_START, DRIVE_BLOCK_COUNT)
+        status = self._read_block(STATUS_BLOCK_START, STATUS_BLOCK_COUNT)
+        return self._encoder_sample(t, pos_raw, drive), self._telemetry(status, drive)
 
     def read_telemetry(self):
-        """Reads all core operating values (one transaction per register)."""
-        return Telemetry(
-            freq_cmd_hz=self._read(reg.REG_FREQ_COMMAND_MONITOR, decimals=2),
-            output_freq_hz=self._read(reg.REG_OUTPUT_FREQ, decimals=2),
-            motor_rpm=self._read(reg.REG_MOTOR_SPEED),
-            dc_bus_v=self._read(reg.REG_DC_BUS_VOLT, decimals=1),
-            output_power_kw=self._read(reg.REG_OUTPUT_POWER, decimals=1, signed=True),
-            torque_pct=self._read(reg.REG_OUTPUT_TORQUE, decimals=1, signed=True),
-            current_a=self.read_output_current(),
-            status_word=self._read(reg.REG_DRIVE_STATUS),
-        )
+        """Reads all core operating values (two block transactions)."""
+        status = self._read_block(STATUS_BLOCK_START, STATUS_BLOCK_COUNT)
+        drive = self._read_block(DRIVE_BLOCK_START, DRIVE_BLOCK_COUNT)
+        return self._telemetry(status, drive)
 
     def read_encoder_sample(self):
-        """
-        Reads the 32-bit encoder position plus 2207H..2209H (two transactions).
+        """Reads the 32-bit encoder position plus 2207H..2209H (two transactions)."""
+        t, pos_raw = self._read_position()
+        monitor = self._read_block(MONITOR_BLOCK_START, MONITOR_BLOCK_COUNT)
+        return self._encoder_sample(t, pos_raw, monitor)
 
-        The timestamp is the midpoint of the position transaction, since that is
-        the value RPM is calculated from. Any fixed latency inside the transaction
-        is the same every sample and cancels out in dt.
+    # --------------------------------------------------------------------------
+    # Read helpers: one transaction each, then pure decoding of the raw words
+    # --------------------------------------------------------------------------
+    def _read_position(self):
+        """
+        Reads 222CH..222DH in one transaction (so the two halves are consistent).
+        Returns (t, pos_raw): the unsigned 32-bit position and t = midpoint of the
+        transaction, since that is the value RPM is calculated from. Any fixed
+        latency inside the transaction is the same every sample and cancels out in dt.
         """
         t_start = time.monotonic()
         pos_low, pos_high = self.instrument.read_registers(
             reg.REG_POS_LOW, POS_WORD_COUNT, functioncode=3
         )
         t_end = time.monotonic()
+        return (t_start + t_end) / 2.0, combine_words(pos_low, pos_high)
 
-        speed_raw, _torque_raw, pg = self.instrument.read_registers(
-            MONITOR_BLOCK_START, MONITOR_BLOCK_COUNT, functioncode=3
+    def _get_current_divisor(self):
+        """2200H's decimal places (high byte of 211FH) are fixed for a drive model: read once."""
+        if self._current_divisor is None:
+            decimal_places = (self._read(reg.REG_CURRENT_DECIMAL) >> 8) & 0xFF
+            self._current_divisor = 10 ** decimal_places
+        return self._current_divisor
+
+    @staticmethod
+    def _encoder_sample(t, pos_raw, words):
+        """words: a block containing 2207H (C2000 RPM) and 2209H (PG feedback)."""
+        return EncoderSample(
+            t=t,
+            pos_raw=pos_raw,
+            pg=words[reg.REG_PG_FEEDBACK],
+            c2000_rpm=words[reg.REG_MOTOR_SPEED],
         )
 
-        return EncoderSample(
-            t=(t_start + t_end) / 2.0,
-            pos_low=pos_low,
-            pos_high=pos_high,
-            pos_raw=combine_words(pos_low, pos_high),
-            pg=pg,
-            c2000_rpm=speed_raw,
+    def _telemetry(self, status, drive):
+        """Decodes the 2101H..2103H (status) and 2200H..2209H (drive) blocks."""
+        return Telemetry(
+            freq_cmd_hz=status[reg.REG_FREQ_COMMAND_MONITOR] / 100.0,
+            output_freq_hz=status[reg.REG_OUTPUT_FREQ] / 100.0,
+            motor_rpm=drive[reg.REG_MOTOR_SPEED],
+            dc_bus_v=drive[reg.REG_DC_BUS_VOLT] / 10.0,
+            output_power_kw=to_signed16(drive[reg.REG_OUTPUT_POWER]) / 10.0,
+            torque_pct=to_signed16(drive[reg.REG_OUTPUT_TORQUE]) / 10.0,
+            current_a=drive[reg.REG_OUTPUT_CURR] / self._get_current_divisor(),
+            status_word=status[reg.REG_DRIVE_STATUS],
         )

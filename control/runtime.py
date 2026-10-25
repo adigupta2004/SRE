@@ -304,13 +304,13 @@ class DynoRuntime:
         self._last_cycle_t = t_start
         comm_errors_before = self._comm_errors
 
-        # 1-3. Encoder sample -> signed RPM, then C2000 telemetry.
+        # 1-3. Encoder sample -> signed RPM, plus C2000 telemetry: one read_cycle(), three
+        # Modbus transactions (block reads; with the torque write, four per cycle).
         # If a read fails the whole cycle is skipped: no torque write, no sample. The
         # drive keeps holding the last command it accepted, and the next good encoder
         # sample gives the correct RPM over the longer, measured interval.
         try:
-            enc = self.vfd.read_encoder_sample()
-            tel = self.vfd.read_telemetry()
+            enc, tel = self.vfd.read_cycle()
         except Exception as e:
             self._comm_failure(e)
             return

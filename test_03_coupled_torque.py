@@ -131,9 +131,11 @@ class CoupledTorqueTest:
         else:
             log(f"[WARN] Implausible encoder jump ({r.rpm:+.0f} rpm). Sample discarded.")
         enc = f"{r.rpm:+7.1f}" if r.plausible else "    ---"
+        # 2208H is % of motor rated torque; rescale to % of Pr.11-27 so it compares with Tcmd.
+        test_pct = tel.torque_pct * 100.0 / config.PR_11_27_PCT
 
         show_status(
-            f"ENC={enc}rpm | Tcmd={self.torque_cmd:+5.1f}% | Test={tel.torque_pct:+5.1f}% "
+            f"ENC={enc}rpm | Tcmd={self.torque_cmd:+5.1f}% | Test={test_pct:+5.1f}% "
             f"| {self.load_type():<8} | I={tel.current_a:6.2f}A | P={tel.output_power_kw:5.1f}kW "
             f"| DC={tel.dc_bus_v:5.1f}V | {tel.state} | C2000={s.c2000_rpm:4d}rpm | dt={r.dt * 1000:3.0f}ms"
         )
@@ -156,7 +158,9 @@ def print_legend():
     rule()
     print(" ENC   = encoder shaft RPM (raw, unfiltered); + = forward")
     print(" Tcmd  = torque command written by this script (Pr.11-34, % of Pr.11-27)")
-    print(" Test  = C2000 estimated output torque (2208H, %)")
+    print(" Test  = C2000 estimated output torque (2208H). The drive reports it as % of motor")
+    print(f"         rated torque; shown here as % of Pr.11-27 (x 100 / {config.PR_11_27_PCT:g}, from")
+    print("         config.PR_11_27_PCT) so it compares directly with Tcmd")
     print(" LOAD  = quadrant implied by Tcmd vs ENC signs (REGEN = opposing the MUT)")
     print(" I / P / DC = output current, output power, DC-bus voltage")
     print(" C2000 = 2207H drive speed (unsigned, comparison only)")

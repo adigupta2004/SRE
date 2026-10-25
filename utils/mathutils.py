@@ -14,6 +14,11 @@ def combine_words(low_word, high_word):
     return (high_word << 16) | low_word
 
 
+def to_signed16(raw):
+    """Two's-complement interpretation of an unsigned 16-bit register word."""
+    return raw - 2**16 if raw >= 2**15 else raw
+
+
 def to_signed32(raw):
     """Two's-complement interpretation of an unsigned 32-bit pattern (for display)."""
     return raw - 2**32 if raw >= 2**31 else raw

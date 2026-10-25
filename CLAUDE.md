@@ -47,7 +47,8 @@ hardware/             device-specific code (talks to or describes a device)
   comms.py            open_instrument(): the only place pyserial/minimalmodbus is configured
   registers.py        C2000 Modbus register map + command words (fixed hardware facts)
   c2000.py            C2000 driver class: run/stop/reset_fault/set_frequency/set_torque,
-                      read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample
+                      read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample,
+                      read_cycle() -> both (runtime: 3 block reads per cycle)
   encoder.py          ShaftSpeedEstimator: EncoderSample stream -> signed RPM (+ filtered)
 control/              dyno control logic: no Modbus details, no GUI code
   torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> N·m, duration_s, PARAMS (GUI builds
@@ -138,9 +139,12 @@ in `README.md`; keep its script table in step with the plan.
    only. A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
    plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω), and
    that caveat must be stated wherever it is shown (code, CSV header, GUI).
-   **OPEN: the loop must reach 10 Hz.** Existing reads cost ~12 Modbus transactions per
-   cycle (read_telemetry 9 + encoder 2 + torque write 1), likely 120-240 ms. Parked by
-   the user; check logged loop_dt on the rig, then fix with contiguous block reads.
+   **Loop rate:** measured 4 Hz on the rig with ~12 transactions/cycle (~20 ms each: C2000
+   RTU frames use >= 10 ms silent intervals + Pr.09-09 delay). Fixed with block reads:
+   `read_cycle()` = 222CH-222DH + 2200H-2209H + 2101H-2103H, 211FH cached, + torque write =
+   4 transactions/cycle (~10 Hz simulated at 20 ms each, i.e. little headroom). The block
+   reads work on the rig; the loop rate there is still to be confirmed. If still short:
+   status block at ~1 Hz, Pr.09-09 -> 0, USB adapter (FTDI) latency timer.
 8. Next: drivecycle / road-load simulation (Mode C) as a profile that plugs into the
    same runtime. Polynomial (Mode B) and T = k/ω profiles are not written yet.
 9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
@@ -184,8 +188,10 @@ in `README.md`; keep its script table in step with the plan.
 - Likely needed for Script 3 (from the manual, **not yet in `registers.py` or verified
   on hardware**): 2100H (warning/error code), 2223H (control mode), 2227H (torque N·m),
   2228H (torque command readback). Add them to `registers.py` only when used.
-- Telemetry is currently one transaction per register (~8 per read). For Script 4's
-  10 Hz budget, consider contiguous block reads (e.g. 2200H–2209H) — verify on hardware first.
+- Reads are block reads (`c2000.py`): 2101H–2103H (3 words), 2200H–2209H (10 words),
+  222CH–222DH; 211FH (current decimals) read once per C2000 instance. Signed words
+  (2206H, 2208H) are decoded with `mathutils.to_signed16`. 10-word block reads are
+  verified on the rig (the manual's "n ≤ 16" data limit is ambiguous).
 - Modbus exception codes: 1 bad function, 2 bad address, 3 bad data, 4 execution failure.
 
 ## Reading the manuals
