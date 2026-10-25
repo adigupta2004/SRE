@@ -62,7 +62,7 @@ class Sample:
 class RunResult:
     profile: str                  # profile description
     reason: str                   # why the run stopped
-    log_path: str
+    log_path: str                 # None if the run was not logged to CSV
     samples: list                 # every Sample of the run (ENTERING .. STOPPING)
     error_times: list             # RUNNING-phase torque error (estimate - command in force)
     errors: list
@@ -156,8 +156,9 @@ class DynoRuntime:
         self.vfd.stop()
         self._thread.start()
 
-    def start_run(self, profile):
-        self._requests.put(("start", profile))
+    def start_run(self, profile, save_log=True):
+        """Requests a run; save_log=False runs it without a CSV file (results are still kept)."""
+        self._requests.put(("start", (profile, save_log)))
 
     def request_stop(self, reason="Stop requested"):
         self._requests.put(("stop", reason))
@@ -210,14 +211,14 @@ class DynoRuntime:
             except queue.Empty:
                 return
             if kind == "start":
-                self._start_run(arg)
+                self._start_run(*arg)
             elif kind == "stop":
                 self._begin_stop(arg)
             elif kind == "exit":
                 self._exiting = True
                 self._begin_stop("Runtime closing")
 
-    def _start_run(self, profile):
+    def _start_run(self, profile, save_log):
         # Refuse a start while closing, during a run, or without the MUT driving the shaft
         # forward (opposing torque on an undriven shaft would spin it backwards).
         if self._exiting:
@@ -232,7 +233,8 @@ class DynoRuntime:
             return
         log = None
         try:
-            log = RunLog(profile)               # before RUN, so a log failure cannot strand the drive
+            if save_log:
+                log = RunLog(profile)           # before RUN, so a log failure cannot strand the drive
             self.vfd.set_torque(0.0)
             self.vfd.run()                      # torque mode: no FWD/REV bits
         except Exception as e:
@@ -352,7 +354,7 @@ class DynoRuntime:
         if self.phase != IDLE:
             # A logging failure (disk full, ...) must never stand between the drive and
             # STOP: report it once, stop logging this run and carry on.
-            if self._log_ok:
+            if self._log is not None and self._log_ok:
                 try:
                     self._log.write(sample)
                 except OSError as e:
@@ -434,14 +436,18 @@ class DynoRuntime:
             # Still STOPPING with the command at 0, so _cycle calls this again next cycle.
             self._comm_failure(e)
             return
-        try:
-            self._log.close()               # final flush can fail too (e.g. disk full)
-        except OSError as e:
-            self._log_ok = False
-            self.on_message(f"[ERROR] CSV log could not be closed cleanly: {e}")
+        if self._log is None:
+            log_note = "Log: not saved"
+        else:
+            try:
+                self._log.close()           # final flush can fail too (e.g. disk full)
+            except OSError as e:
+                self._log_ok = False
+                self.on_message(f"[ERROR] CSV log could not be closed cleanly: {e}")
+            incomplete = "" if self._log_ok else " (incomplete)"
+            log_note = f"Log{incomplete}: {self._log.path}"
         self.phase = IDLE
-        incomplete = "" if self._log_ok else " (incomplete)"
-        self.on_message(f"0% written, STOP sent. Log{incomplete}: {self._log.path}")
+        self.on_message(f"0% written, STOP sent. {log_note}")
         self.on_run_finished(self._build_result())
 
     def _build_result(self):
@@ -460,7 +466,7 @@ class DynoRuntime:
         return RunResult(
             profile=self._profile.describe(),
             reason=self._stop_reason,
-            log_path=self._log.path,
+            log_path=None if self._log is None else self._log.path,
             samples=samples,
             error_times=error_times,
             errors=errors,

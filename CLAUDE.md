@@ -77,7 +77,7 @@ Layering rules (keep these when adding scripts):
   logic), `gui/` (widgets) or `utils/` (generic). New areas get their own top-level
   folder only when they are actually written — keep the structure generic and simple.
 - Once a DynoRuntime is started, only its worker thread touches the C2000. The GUI
-  only calls `start_run(profile)` / `request_stop()` and receives data via callbacks
+  only calls `start_run(profile, save_log)` / `request_stop()` and receives data via callbacks
   (bridged to Qt signals); the loop never waits for the GUI.
 - Torque profiles return raw targets; the runtime clamps to the config limits and owns
   slewing (enter profile / stop) at `TORQUE_SLEW_PCT_PER_S`.

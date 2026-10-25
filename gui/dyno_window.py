@@ -1,14 +1,14 @@
 """
 DynoWindow: main window for running torque profiles on the dyno.
 
-It talks only to a control.runtime.DynoRuntime: start_run(profile) and
+It talks only to a control.runtime.DynoRuntime: start_run(profile, save_log) and
 request_stop(). Samples, messages and run results arrive from the runtime's
 worker thread through RuntimeBridge signals (queued into the GUI thread), so the
 control loop never waits for the GUI. Plots are redrawn on a GUI timer.
 """
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit, QPushButton,
                                QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 import config
@@ -81,6 +81,8 @@ class DynoWindow(QMainWindow):
         buttons = QHBoxLayout()
         buttons.addWidget(self._start)
         buttons.addWidget(self._stop)
+        self._save_log = QCheckBox("Save CSV log")      # applies from the next Start; locked during a run
+        self._save_log.setChecked(True)
 
         self._telemetry = TelemetryPanel("Telemetry", TELEMETRY_FIELDS)
         self._messages = QPlainTextEdit(readOnly=True)
@@ -96,6 +98,7 @@ class DynoWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(self._editor)
         left_layout.addLayout(buttons)
+        left_layout.addWidget(self._save_log)
         left_layout.addWidget(limits)
         left_layout.addWidget(self._telemetry)
         left_layout.addWidget(QLabel("Messages"))
@@ -156,7 +159,7 @@ class DynoWindow(QMainWindow):
         self._torque_plot.clear()
         self._speed_plot.clear()
         self._tabs.setCurrentIndex(0)
-        self.runtime.start_run(profile)
+        self.runtime.start_run(profile, save_log=self._save_log.isChecked())
 
     def closeEvent(self, event):
         # Two-step close during a run: the first close asks the runtime to stop and keeps
@@ -225,7 +228,7 @@ class DynoWindow(QMainWindow):
             f"<b>{r.profile}</b><br>"
             f"Stopped: {r.reason} | Duration {r.duration_s:.1f} s | Mean loop rate {loop_hz:.1f} Hz | "
             f"Overruns {r.overruns}/{len(r.samples)} cycles<br>"
-            f"CSV: {r.log_path}<br>{stats}<br>"
+            f"CSV: {r.log_path or 'not saved'}<br>{stats}<br>"
             f"<i>Error = C2000 estimate - command in force when read, over the RUNNING phase. "
             f"The C2000 estimate is the drive's internal model, not an independent torque measurement.</i>"
         )
@@ -244,6 +247,7 @@ class DynoWindow(QMainWindow):
         self._start.setEnabled(idle)
         self._stop.setEnabled(not idle)
         self._editor.setEnabled(idle)
+        self._save_log.setEnabled(idle)
 
     def _refresh_plots(self):
         self._torque_plot.refresh()

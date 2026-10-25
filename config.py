@@ -60,13 +60,19 @@ LOG_DIR = "logs"
 # ==============================================================================
 # COMMISSIONING LIMITS (runtime)
 # ==============================================================================
-# Every torque command is clamped to [MIN, MAX] (% of Pr.11-27). With the MUT
-# running forward, negative torque opposes it; MAX = 0 forbids assisting torque.
-TORQUE_LIMIT_MIN_PCT = -10.0
+# Every torque command is clamped to [MIN, MAX] (% of Pr.11-27)
+# Pr.11-27 is set to 36%, ie the max commandable torque is 36% of rated dyno 
+# motor torque, ie 36% of (30kW/2900rpm) which is 35.6 Nm. See reason in documentation). 
+# Hence, this percentage is a percentage of 35.6 Nm, which is the max allowed operating
+# torque of our coupled system.
+# With the MUT running forward, negative torque opposes it; MAX = 0 forbids assisting torque.
+TORQUE_REFERENCE_NM = 35.6
+TORQUE_LIMIT_MIN_PCT = -100.0
 TORQUE_LIMIT_MAX_PCT = 0.0
 
-# Controlled shutdown if |encoder RPM| exceeds this (MUT rated 2940 rpm).
-MAX_ABS_RPM = 2940.0
+# Controlled shutdown if |encoder RPM| exceeds this (dyno IM rated 2900 rpm, MUT 
+# rated 2940 rpm).
+MAX_ABS_RPM = 3000.0
 
 # A run needs the MUT driving the shaft forward: it will not start below this
 # encoder RPM, and shuts down if speed falls below it while torque is applied
