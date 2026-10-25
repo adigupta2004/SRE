@@ -29,6 +29,7 @@ import config
 from control.run_log import RunLog
 from control.validation import error_stats, torque_error
 from hardware.encoder import ShaftSpeedEstimator
+from utils.mathutils import power_to_torque_nm
 from utils.timing import RatePacer
 
 IDLE = "IDLE"
@@ -51,7 +52,11 @@ class Sample:
     encoder_rpm: float            # raw signed encoder RPM (None if implausible)
     filtered_rpm: float
     c2000_rpm: int                # 2207H, unsigned
-    torque_estimate_nm: float     # 2208H converted to N·m, signed
+    torque_c2000_nm: float        # 2208H in N·m: the drive's own torque estimate, signed
+    torque_elec_power_nm: float   # drive ELECTRICAL output power / filtered shaft speed (P/ω), signed.
+                                  # Includes the dyno motor's losses, so it is offset by about
+                                  # +losses/ω vs the shaft torque (in regen: less negative).
+                                  # None below MIN_RUN_RPM or with implausible encoder data.
     current_a: float
     output_power_kw: float        # signed, negative = regenerating
     dc_bus_v: float
@@ -327,6 +332,14 @@ class DynoRuntime:
         # commanded. The command is written every cycle, even when unchanged.
         # _command_in_force is updated only if the write succeeds.
         target, limited, profile_time = self._next_command(loop_dt)
+
+        # Torque from the drive's electrical output power, T = P / ω (ω from the filtered
+        # encoder speed). P is measured at the drive output, before the dyno motor's
+        # losses, so this reads about losses/ω more positive than the shaft torque
+        # (in regen, less negative). Near standstill P/ω is meaningless, hence the gate.
+        torque_elec_power = None
+        if r.plausible and abs(r.rpm_filtered) >= config.MIN_RUN_RPM:
+            torque_elec_power = power_to_torque_nm(tel.output_power_kw * 1000.0, r.rpm_filtered)
         if self.phase != IDLE:
             try:
                 self._command_in_force = self.vfd.set_torque_nm(self._command)
@@ -350,7 +363,8 @@ class DynoRuntime:
             encoder_rpm=r.rpm if r.plausible else None,
             filtered_rpm=r.rpm_filtered,
             c2000_rpm=enc.c2000_rpm,
-            torque_estimate_nm=tel.torque_nm,
+            torque_c2000_nm=tel.torque_nm,
+            torque_elec_power_nm=torque_elec_power,
             current_a=tel.current_a,
             output_power_kw=tel.output_power_kw,
             dc_bus_v=tel.dc_bus_v,
@@ -457,13 +471,14 @@ class DynoRuntime:
 
     def _build_result(self):
         samples = self._samples
-        # Error statistics cover the RUNNING phase only: the entry and stop ramps are
+        # Error statistics cover the RUNNING phase and the C2000 estimate only: the entry
+        # and stop ramps, and the electrical-power estimate (offset by motor losses), are
         # plotted but not scored.
         running = [s for s in samples if s.phase == RUNNING]
         error_times, errors = torque_error(
             [s.elapsed_time for s in running],
             [s.torque_command_nm for s in running],
-            [s.torque_estimate_nm for s in running],
+            [s.torque_c2000_nm for s in running],
         )
         # The first sample's loop_dt also contains the start request's extra writes
         # (0 N·m + RUN), so it is left out of the mean loop rate.

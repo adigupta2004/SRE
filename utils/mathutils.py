@@ -2,6 +2,8 @@
 Pure math helpers: no I/O, no hardware, safe to unit-test on any machine.
 """
 
+import math
+
 
 def combine_words(low_word, high_word):
     """
@@ -31,6 +33,15 @@ def wrap_delta(new, old, modulus):
 def counts_to_rpm(d_counts, counts_per_rev, dt_s):
     """Converts a count change over dt_s seconds to revolutions per minute."""
     return (d_counts / counts_per_rev) / dt_s * 60.0
+
+
+def power_to_torque_nm(power_w, rpm):
+    """
+    Torque from power and speed: T = P / omega, omega = 2*pi*rpm/60. Signs carry
+    through (P < 0 at rpm > 0 gives T < 0). Undefined at rpm = 0: callers must
+    keep rpm away from zero.
+    """
+    return power_w / (2.0 * math.pi * rpm / 60.0)
 
 
 class LowPassFilter:

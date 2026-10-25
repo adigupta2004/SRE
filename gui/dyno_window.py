@@ -20,13 +20,20 @@ from gui.trace_plot import TracePlot
 
 PLOT_REFRESH_MS = 100
 
+# Torque from the drive's electrical output power. Its offset must be stated wherever it is shown.
+TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate (incl. losses)"
+TORQUE_ELEC_POWER_NOTE = ("Torque est. elec. P/ω = drive electrical output power / shaft speed. It includes "
+                   "the dyno motor's losses, so it reads about losses/ω more positive than the shaft "
+                   "torque (in regen: less negative). Blank below the min run RPM.")
+
 TELEMETRY_FIELDS = [
     ("phase", "Phase"),
     ("drive_state", "Drive state"),
     ("encoder_rpm", "Encoder RPM"),
     ("c2000_rpm", "C2000 RPM"),
     ("torque_command", "Torque command"),
-    ("torque_estimate", "Torque estimate"),
+    ("torque_c2000", "Torque est. C2000"),
+    ("torque_elec_power", "Torque est. elec. P/ω *"),
     ("current", "Current"),
     ("power", "Output power"),
     ("dc_bus", "DC bus"),
@@ -85,6 +92,8 @@ class DynoWindow(QMainWindow):
         self._save_log.setChecked(True)
 
         self._telemetry = TelemetryPanel("Telemetry", TELEMETRY_FIELDS)
+        torque_elec_power_note = QLabel(f"<i>* {TORQUE_ELEC_POWER_NOTE}</i>")
+        torque_elec_power_note.setWordWrap(True)
         self._messages = QPlainTextEdit(readOnly=True)
         self._messages.setMaximumBlockCount(500)
 
@@ -101,6 +110,7 @@ class DynoWindow(QMainWindow):
         left_layout.addWidget(self._save_log)
         left_layout.addWidget(limits)
         left_layout.addWidget(self._telemetry)
+        left_layout.addWidget(torque_elec_power_note)
         left_layout.addWidget(QLabel("Messages"))
         left_layout.addWidget(self._messages, stretch=1)
 
@@ -108,6 +118,7 @@ class DynoWindow(QMainWindow):
         self._torque_plot = TracePlot("Torque", "time (s)", "torque (N·m)")
         self._torque_plot.add_trace("Command")
         self._torque_plot.add_trace("C2000 estimate")
+        self._torque_plot.add_trace(TORQUE_ELEC_POWER_TRACE)
         self._speed_plot = TracePlot("Speed", "time (s)", "speed (rpm)")
         self._speed_plot.add_trace("Encoder RPM")
         self._speed_plot.add_trace("C2000 RPM", dashed=True)
@@ -121,6 +132,7 @@ class DynoWindow(QMainWindow):
         self._compare_plot = TracePlot("Torque comparison", "time (s)", "torque (N·m)")
         self._compare_plot.add_trace("Command")
         self._compare_plot.add_trace("C2000 estimate")
+        self._compare_plot.add_trace(TORQUE_ELEC_POWER_TRACE)
         self._error_plot = TracePlot("Torque error (estimate - command)", "time (s)", "error (N·m)")
         self._error_plot.add_trace("Error", color="#d62728")
         results = QWidget()
@@ -185,7 +197,8 @@ class DynoWindow(QMainWindow):
 
         if s.phase != IDLE:
             self._torque_plot.append("Command", s.elapsed_time, s.torque_command_nm)
-            self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_estimate_nm)
+            self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_c2000_nm)
+            self._torque_plot.append(TORQUE_ELEC_POWER_TRACE, s.elapsed_time, s.torque_elec_power_nm)
             self._speed_plot.append("Encoder RPM", s.elapsed_time, s.encoder_rpm)
             self._speed_plot.append("C2000 RPM", s.elapsed_time, s.c2000_rpm)
 
@@ -195,7 +208,8 @@ class DynoWindow(QMainWindow):
             "encoder_rpm": fmt(s.encoder_rpm, "+.1f", " rpm"),
             "c2000_rpm": fmt(s.c2000_rpm, "d", " rpm"),
             "torque_command": fmt(s.torque_command_nm, "+.2f", " N·m") + (" (limited)" if s.limited else ""),
-            "torque_estimate": fmt(s.torque_estimate_nm, "+.2f", " N·m"),
+            "torque_c2000": fmt(s.torque_c2000_nm, "+.2f", " N·m"),
+            "torque_elec_power": fmt(s.torque_elec_power_nm, "+.2f", " N·m"),
             "current": fmt(s.current_a, ".2f", " A"),
             "power": fmt(s.output_power_kw, "+.1f", " kW"),
             "dc_bus": fmt(s.dc_bus_v, ".1f", " V"),
@@ -211,7 +225,8 @@ class DynoWindow(QMainWindow):
         times = [s.elapsed_time for s in r.samples]
         self._compare_plot.clear()
         self._compare_plot.set_data("Command", times, [s.torque_command_nm for s in r.samples])
-        self._compare_plot.set_data("C2000 estimate", times, [s.torque_estimate_nm for s in r.samples])
+        self._compare_plot.set_data("C2000 estimate", times, [s.torque_c2000_nm for s in r.samples])
+        self._compare_plot.set_data(TORQUE_ELEC_POWER_TRACE, times, [s.torque_elec_power_nm for s in r.samples])
         self._error_plot.clear()
         self._error_plot.set_data("Error", r.error_times, r.errors)
         self._compare_plot.refresh()
@@ -230,7 +245,8 @@ class DynoWindow(QMainWindow):
             f"Overruns {r.overruns}/{len(r.samples)} cycles<br>"
             f"CSV: {r.log_path or 'not saved'}<br>{stats}<br>"
             f"<i>Error = C2000 estimate - command in force when read, over the RUNNING phase. "
-            f"The C2000 estimate is the drive's internal model, not an independent torque measurement.</i>"
+            f"The C2000 estimate is the drive's internal model, not an independent torque measurement. "
+            f"{TORQUE_ELEC_POWER_TRACE} is plotted but not scored: {TORQUE_ELEC_POWER_NOTE}</i>"
         )
         self._tabs.setCurrentIndex(1)
         if self._close_pending:

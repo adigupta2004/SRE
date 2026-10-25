@@ -24,7 +24,8 @@ COLUMNS = [
     "encoder_rpm",
     "filtered_rpm",
     "c2000_rpm",
-    "torque_estimate_nm",    # 2208H converted with the motor rated torque
+    "torque_c2000_nm",       # 2208H converted with the motor rated torque (drive's own estimate)
+    "torque_elec_power_nm",  # output power / filtered rpm: includes motor losses (see header)
     "current_a",
     "output_power_kw",
     "dc_bus_v",
@@ -60,6 +61,10 @@ class RunLog:
             f"| estimate 100 % (2208H) = motor rated torque = {config.MOTOR_RATED_TORQUE_NM:.2f} Nm",
             "Units: time s; torque Nm (signed); rpm signed (+ = forward); "
             "power kW (negative = regenerating)",
+            "torque_elec_power_nm = drive ELECTRICAL output power (2206H; 0.1 kW steps) / filtered "
+            "shaft speed. It includes the dyno motor's losses so it is offset by about +losses/w vs "
+            "the shaft torque (in regen it reads less negative). Blank below the min run rpm. "
+            "Not used in the error statistics.",
         ):
             self._file.write(f"# {line}\n")
         self._writer = csv.writer(self._file)

@@ -134,7 +134,10 @@ in `README.md`; keep its script table in step with the plan.
    and torque-feedback-validation scripts: control/ runtime + profiles + CSV + validation,
    gui/ widgets. Shutdown triggers: Stop, profile end, |RPM| > MAX_ABS_RPM, RPM <
    MIN_RUN_RPM, implausible encoder, MAX_CONSECUTIVE_COMM_ERRORS. Validation statistics
-   are only bias, MAE and max |error| (user asked for nothing more).
+   are only bias, MAE and max |error| (user asked for nothing more), for the C2000 estimate
+   only. A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
+   plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω), and
+   that caveat must be stated wherever it is shown (code, CSV header, GUI).
    **OPEN: the loop must reach 10 Hz.** Existing reads cost ~12 Modbus transactions per
    cycle (read_telemetry 9 + encoder 2 + torque write 1), likely 120-240 ms. Parked by
    the user; check logged loop_dt on the rig, then fix with contiguous block reads.
