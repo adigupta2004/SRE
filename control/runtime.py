@@ -1,27 +1,29 @@
 """
 Dyno runtime: the reusable ~10 Hz control loop.
 
-A worker thread owns the C2000 while the runtime is open. Every cycle it:
+This module is the loop itself and knows nothing about processes or GUIs.
+control/runtime_process.py runs it in a separate process, so that the GUI cannot
+slow it down (see there for why); scripts without a GUI can use DynoRuntime directly.
+
+run() is the loop; it owns the C2000 while it runs. Every cycle it:
     reads the encoder sample and C2000 telemetry -> signed shaft RPM
     evaluates the active torque profile (actual elapsed time, actual RPM)
-    clamps to the commissioning torque limits -> writes the torque command
+    clamps to the commissioning torque limits -> writes the torque setpoint
     measures loop timing -> logs the sample -> publishes it
 and paces itself with RatePacer. Nothing here waits on a GUI: results are
-published through callbacks, which must return quickly (e.g. emit a Qt signal).
+published through callbacks, which must return quickly (e.g. put the event on a queue).
 
 Phases:
     IDLE      drive STOPPED, read-only monitoring (no torque writes, no logging)
-    ENTERING  RUN sent at 0 N·m; command slews to the profile's starting target
+    ENTERING  RUN sent at 0 N·m; torque setpoint slews to the profile's starting target
     RUNNING   profile active; its clock starts when ENTERING completes
-    STOPPING  command slews to 0, then 0 N·m is written explicitly and STOP sent
+    STOPPING  torque setpoint slews to 0, then 0 N·m is written explicitly and STOP sent
 
 Controlled shutdown (-> STOPPING) on: Stop request, profile end, |RPM| above
 MAX_ABS_RPM, RPM below MIN_RUN_RPM, implausible encoder data, repeated comm
 errors, or an unexpected error in the loop.
 """
 
-import queue
-import threading
 import time
 from dataclasses import dataclass
 
@@ -96,54 +98,64 @@ def slew(value, target, max_step):
     return value + max_step if target > value else value - max_step
 
 
+def shutdown_timeout_s():
+    """
+    Worst-case time for a normal shutdown: ramping the largest allowed torque setpoint to
+    0 N·m at TORQUE_SLEW_NM_PER_S, plus a margin for the final 0 N·m + STOP and comm
+    retries. DynoRuntime.run() gives up a shutdown after this long; RuntimeProcess.close()
+    waits this long plus the time for the control process to exit.
+    """
+    max_torque_nm = max(abs(config.TORQUE_LIMIT_MIN_NM), abs(config.TORQUE_LIMIT_MAX_NM))
+    return max_torque_nm / config.TORQUE_SLEW_NM_PER_S + 10.0
+
+
 class DynoRuntime:
     """
-    Threading model:
-      - After start(), only the worker thread talks to the C2000 and only it reads
-        or changes the per-run state below.
-      - Other threads (e.g. the GUI) only call start_run() / request_stop() /
-        close(), which just put requests on a queue, and may read `phase`.
-      - The worker applies queued requests at the start of each cycle, so no
-        locks are needed.
-      - Callbacks run in the worker thread; they must be quick and must not touch
-        the drive (the GUI turns them into Qt signals).
+    Single-threaded: run() is the loop and runs in the caller's thread, which then owns
+    the C2000. Commands come in only through the next_command function given to run(),
+    which is asked for them at the start of every cycle, so nothing else ever touches
+    the runtime's state and no locks are needed.
+
+    Commands are (kind, arg) tuples:
+        ("start", (profile, save_log))   start a run (save_log=False: no CSV, results still kept)
+        ("stop", reason)                 controlled stop of the active run
+        ("exit", None)                   stop any active run, then return from run()
     """
 
     def __init__(self, vfd, on_sample=None, on_message=None, on_run_finished=None):
         self.vfd = vfd
-        # Callbacks: the runtime's only output, called from the worker thread.
+        # Callbacks: the runtime's only output, called from the loop.
         #   on_sample(Sample)          every successful cycle, IDLE included (~10 Hz)
         #   on_message(str)            events: start/stop, refusals, warnings, errors
         #   on_run_finished(RunResult) once per run, after 0 N·m + STOP
         # Any not given becomes a no-op, so the code can always call them unchecked.
-        # They are public so a GUI can plug in after construction (DynoWindow sets them
-        # to Qt signal emits, which queue the data to the GUI thread and return at once).
-        # Set them before start(). Each must return quickly: its time adds to the cycle.
+        # Each must return quickly: its time adds to the cycle (runtime_process.py
+        # sets them to queue puts, which return at once).
         self.on_sample = on_sample or (lambda sample: None)
         self.on_message = on_message or (lambda text: None)
         self.on_run_finished = on_run_finished or (lambda result: None)
 
         self.phase = IDLE
-        self._requests = queue.Queue()
-        self._thread = threading.Thread(target=self._worker, name="dyno-runtime", daemon=True)
         self._period = 1.0 / config.LOOP_RATE_HZ
         self._speed = None            # ShaftSpeedEstimator, seeded by the first sample
         self._rpm = None              # last plausible raw encoder RPM
         self._comm_errors = 0
         self._last_cycle_t = None
         self._exiting = False
+        self._exit_deadline = None    # monotonic time by which an exit must have finished
 
-        # Per-run state. Two torque values are kept on purpose:
-        #   _command           what we want the drive to have: the unrounded value the
-        #                      slew/profile logic works on (rounding it every cycle
-        #                      could stall a slow slew).
-        #   _command_in_force  what the drive actually has: the last value whose
-        #                      write succeeded. Logs, plots and the torque-error
-        #                      statistics use this, so a failed write never shows up
-        #                      as a torque the drive did not receive.
+        # Per-run state. Two torque values are kept on purpose ("command" in this module
+        # means only the start / stop / exit commands that run() receives):
+        #   _torque_setpoint_nm  what we want the drive to have: the unrounded value the
+        #                        slew/profile logic works on (rounding it every cycle
+        #                        could stall a slow slew).
+        #   _torque_in_force_nm  what the drive actually has: the last value whose
+        #                        write succeeded. Logs, plots and the torque-error
+        #                        statistics use this, so a failed write never shows up
+        #                        as a torque the drive did not receive.
         self._profile = None
-        self._command = 0.0           # unrounded torque command (N·m)
-        self._command_in_force = 0.0  # last torque command the drive accepted (N·m, after register rounding)
+        self._torque_setpoint_nm = 0.0    # unrounded torque setpoint (N·m)
+        self._torque_in_force_nm = 0.0    # last torque setpoint the drive accepted (N·m, after register rounding)
         self._run_t0 = None
         self._profile_t0 = None
         self._stop_reason = None
@@ -153,80 +165,64 @@ class DynoRuntime:
         self._overruns = 0
 
     # --------------------------------------------------------------------------
-    # Thread-safe API
+    # Public API: start(), then run()
     # --------------------------------------------------------------------------
     def start(self):
         """
-        Commands 0 N·m and STOP, checks that the drive's torque scaling matches
-        config (Pr.05-02, Pr.05-03, Pr.11-27), then starts the worker in IDLE.
-        Raises on comm failure or a scaling mismatch (ValueError); the drive is
-        then left at 0 + STOP. Every user of the runtime gets this check.
+        Commands 0 N·m and STOP and checks that the drive's torque scaling matches
+        config (Pr.05-02, Pr.05-03, Pr.11-27). Raises on comm failure or a scaling
+        mismatch (ValueError); the drive is then left at 0 + STOP. Call before run().
         """
         self.vfd.set_torque_nm(0.0)
         self.vfd.stop()
         self.vfd.verify_torque_scaling()
-        self._thread.start()
 
-    def start_run(self, profile, save_log=True):
-        """Requests a run; save_log=False runs it without a CSV file (results are still kept)."""
-        self._requests.put(("start", (profile, save_log)))
-
-    def request_stop(self, reason="Stop requested"):
-        self._requests.put(("stop", reason))
-
-    def close(self, timeout=None):
+    def run(self, next_command):
         """
-        Stops any active run through the normal shutdown path, then ends the
-        worker. Returns True if the worker finished within the timeout.
+        The loop, in the caller's thread. next_command() must return the next waiting
+        command or None, without blocking. Returns after an "exit" command once any
+        active run has gone through the normal shutdown (ramp -> 0 N·m -> STOP): True,
+        or False if that took longer than shutdown_timeout_s() (e.g. the drive stopped
+        answering).
         """
-        if timeout is None:
-            max_command_nm = max(abs(config.TORQUE_LIMIT_MIN_NM), abs(config.TORQUE_LIMIT_MAX_NM))
-            max_ramp_down_s = max_command_nm / config.TORQUE_SLEW_NM_PER_S
-            timeout = max_ramp_down_s + 10.0      # margin: final 0 N·m + STOP, comm retries
-        self._requests.put(("exit", None))
-        if self._thread.is_alive():
-            self._thread.join(timeout)
-        return not self._thread.is_alive()
-
-    @property
-    def active(self):
-        return self.phase != IDLE
-
-    # --------------------------------------------------------------------------
-    # Worker
-    # --------------------------------------------------------------------------
-    def _worker(self):
-        # Each iteration: wait for the next slot -> apply queued requests -> one cycle.
+        # Each iteration: wait for the next slot -> apply waiting commands -> one cycle.
         pacer = RatePacer(config.LOOP_RATE_HZ)
         self._last_cycle_t = time.monotonic()
         while True:
             pacer.wait()
             try:
-                self._handle_requests()
-                # An exit request first moves an active run to STOPPING; the thread only
-                # ends once that has finished (back in IDLE), so closing always goes
-                # through ramp -> 0 N·m -> STOP.
-                if self._exiting and self.phase == IDLE:
-                    return
+                self._apply_commands(next_command)
+                # An exit first moves an active run to STOPPING; run() only returns once
+                # that has finished (back in IDLE), so exiting always goes through
+                # ramp -> 0 N·m -> STOP - unless the deadline passes first.
+                if self._exiting:
+                    if self.phase == IDLE:
+                        return True
+                    if time.monotonic() > self._exit_deadline:
+                        self.on_message("[ERROR] Shutdown did not finish in time - "
+                                        "check the drive and use keypad STOP.")
+                        return False
                 self._cycle()
             except Exception as e:
                 # Never let the loop die with the drive running.
                 self.on_message(f"[ERROR] Unexpected runtime error: {e!r}")
                 self._begin_stop("Unexpected runtime error")
 
-    def _handle_requests(self):
-        """Applies queued requests (an exit request sets self._exiting)."""
-        while True:
-            try:
-                kind, arg = self._requests.get_nowait()
-            except queue.Empty:
-                return
+    # --------------------------------------------------------------------------
+    # Loop internals
+    # --------------------------------------------------------------------------
+    def _apply_commands(self, next_command):
+        """Applies every command waiting now (an exit command sets self._exiting)."""
+        while (command := next_command()) is not None:
+            kind, arg = command
             if kind == "start":
                 self._start_run(*arg)
             elif kind == "stop":
                 self._begin_stop(arg)
             elif kind == "exit":
-                self._exiting = True
+                if not self._exiting:
+                    self._exiting = True
+                    self._exit_deadline = time.monotonic() + shutdown_timeout_s()
                 self._begin_stop("Runtime closing")
 
     def _start_run(self, profile, save_log):
@@ -261,8 +257,8 @@ class DynoRuntime:
 
         # The drive is now in RUN at 0 N·m: reset the per-run state and start entering the profile.
         self._profile = profile
-        self._command = 0.0
-        self._command_in_force = 0.0
+        self._torque_setpoint_nm = 0.0
+        self._torque_in_force_nm = 0.0
         self._run_t0 = time.monotonic()
         self._profile_t0 = None
         self._stop_reason = None
@@ -307,7 +303,7 @@ class DynoRuntime:
         # 1-3. Encoder sample -> signed RPM, plus C2000 telemetry: one read_cycle(), three
         # Modbus transactions (block reads; with the torque write, four per cycle).
         # If a read fails the whole cycle is skipped: no torque write, no sample. The
-        # drive keeps holding the last command it accepted, and the next good encoder
+        # drive keeps holding the last torque it accepted, and the next good encoder
         # sample gives the correct RPM over the longer, measured interval.
         try:
             enc, tel = self.vfd.read_cycle()
@@ -327,11 +323,16 @@ class DynoRuntime:
             self._begin_stop("Implausible encoder data")
         self._check_limits()
 
-        # 4-6. Profile -> limits -> torque command in N·m. The driver converts it to
+        # 4-6. Profile -> limits -> torque setpoint in N·m. The driver converts it to
         # Pr.11-34 % and rounds to the register's 0.1 %, returning the N·m actually
-        # commanded. The command is written every cycle, even when unchanged.
-        # _command_in_force is updated only if the write succeeds.
-        target, limited, profile_time = self._next_command(loop_dt)
+        # written. The setpoint is written every cycle, even when unchanged.
+        # _torque_in_force_nm is updated only if the write succeeds.
+        target, limited, profile_time = self._update_torque_setpoint(loop_dt)
+        if self.phase != IDLE:
+            try:
+                self._torque_in_force_nm = self.vfd.set_torque_nm(self._torque_setpoint_nm)
+            except Exception as e:
+                self._comm_failure(e)
 
         # Torque from the drive's electrical output power, T = P / ω (ω from the filtered
         # encoder speed). P is measured at the drive output, before the dyno motor's
@@ -340,11 +341,6 @@ class DynoRuntime:
         torque_elec_power = None
         if r.plausible and abs(r.rpm_filtered) >= config.MIN_RUN_RPM:
             torque_elec_power = power_to_torque_nm(tel.output_power_kw * 1000.0, r.rpm_filtered)
-        if self.phase != IDLE:
-            try:
-                self._command_in_force = self.vfd.set_torque_nm(self._command)
-            except Exception as e:
-                self._comm_failure(e)
 
         # 7-9. Timing, logging, publishing
         cycle_time = time.monotonic() - t_start      # reads + write only: logging/publishing not included
@@ -358,7 +354,7 @@ class DynoRuntime:
             overruns=None if self.phase == IDLE else self._overruns,
             profile_time=profile_time,
             profile_target_nm=target,
-            torque_command_nm=None if self.phase == IDLE else self._command_in_force,
+            torque_command_nm=None if self.phase == IDLE else self._torque_in_force_nm,
             limited=limited,
             encoder_rpm=r.rpm if r.plausible else None,
             filtered_rpm=r.rpm_filtered,
@@ -382,9 +378,9 @@ class DynoRuntime:
             self._samples.append(sample)
         self.on_sample(sample)
 
-        # The stop ramp is done once the target has reached 0 AND the drive has
+        # The stop ramp is done once the setpoint has reached 0 AND the drive has
         # accepted 0 (so a failed last write delays STOP rather than skipping 0 N·m).
-        if self.phase == STOPPING and self._command == 0.0 and self._command_in_force == 0.0:
+        if self.phase == STOPPING and self._torque_setpoint_nm == 0.0 and self._torque_in_force_nm == 0.0:
             self._finish_run()
 
         # A run of consecutive comm failures ends only with a cycle in which every
@@ -401,17 +397,18 @@ class DynoRuntime:
         elif self._rpm < config.MIN_RUN_RPM:
             self._begin_stop(f"RPM {self._rpm:.0f} below {config.MIN_RUN_RPM:g}: MUT not driving the shaft")
 
-    def _next_command(self, dt):
+    def _update_torque_setpoint(self, dt):
         """
-        Updates self._command for the current phase. Returns (target, limited, profile_time).
+        Updates self._torque_setpoint_nm for the current phase.
+        Returns (target, limited, profile_time).
 
-            IDLE      nothing is commanded
+            IDLE      no torque is set
             STOPPING  slew toward 0
             ENTERING  evaluate the profile at t = 0, clamp, slew toward it; when the
-                      command arrives the profile clock starts (-> RUNNING), so the
+                      setpoint arrives the profile clock starts (-> RUNNING), so the
                       profile shape itself is never distorted by the entry ramp
-            RUNNING   evaluate the profile at its own elapsed time, clamp, command it
-                      directly (steps in a profile stay steps)
+            RUNNING   evaluate the profile at its own elapsed time, clamp, use it
+                      directly as the setpoint (steps in a profile stay steps)
         """
         max_step = config.TORQUE_SLEW_NM_PER_S * dt     # slew limit for this cycle's actual dt
 
@@ -425,7 +422,7 @@ class DynoRuntime:
         if self.phase == IDLE:
             return None, False, None
         if self.phase == STOPPING:
-            self._command = slew(self._command, 0.0, max_step)
+            self._torque_setpoint_nm = slew(self._torque_setpoint_nm, 0.0, max_step)
             return None, False, None
 
         if self.phase == ENTERING:
@@ -435,15 +432,15 @@ class DynoRuntime:
         clamped = min(max(target, config.TORQUE_LIMIT_MIN_NM), config.TORQUE_LIMIT_MAX_NM)
 
         if self.phase == ENTERING:
-            self._command = slew(self._command, clamped, max_step)
-            if self._command == clamped:
+            self._torque_setpoint_nm = slew(self._torque_setpoint_nm, clamped, max_step)
+            if self._torque_setpoint_nm == clamped:
                 self.phase = RUNNING
                 self._profile_t0 = time.monotonic()
                 self.on_message("Profile started.")
                 return target, clamped != target, 0.0
             return target, clamped != target, None
 
-        self._command = clamped
+        self._torque_setpoint_nm = clamped
         return target, clamped != target, profile_time
 
     def _finish_run(self):
@@ -452,7 +449,7 @@ class DynoRuntime:
             self.vfd.set_torque_nm(0.0)
             self.vfd.stop()
         except Exception as e:
-            # Still STOPPING with the command at 0, so _cycle calls this again next cycle.
+            # Still STOPPING with the setpoint at 0, so _cycle calls this again next cycle.
             self._comm_failure(e)
             return
         if self._log is None:

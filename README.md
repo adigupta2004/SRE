@@ -74,7 +74,8 @@ hardware/          everything that talks to or describes a device
   encoder.py       signed shaft RPM from the encoder position counter
 control/           dyno control logic, no Modbus and no GUI code
   torque_profiles.py   torque target vs time and RPM (constant, ramp, step, linear vs RPM)
-  runtime.py       the ~10 Hz read -> profile -> limits -> command -> log loop (worker thread)
+  runtime.py       the ~10 Hz read -> profile -> limits -> command -> log loop
+  runtime_process.py  runs that loop in its own process so the GUI cannot slow it down
   run_log.py       one CSV file per run in logs/
   validation.py    commanded vs estimated torque error: bias, MAE, max error
 gui/               reusable PySide6 + pyqtgraph widgets; never talks to the hardware

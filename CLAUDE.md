@@ -53,16 +53,22 @@ hardware/             device-specific code (talks to or describes a device)
 control/              dyno control logic: no Modbus details, no GUI code
   torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> N·m, duration_s, PARAMS (GUI builds
                       fields from them); Constant, Ramp, Step, LinearRpm; PROFILES list
-  runtime.py          DynoRuntime: worker thread owning the C2000; phases IDLE / ENTERING /
-                      RUNNING / STOPPING; callbacks on_sample / on_message / on_run_finished;
-                      Sample, RunResult dataclasses
+  runtime.py          DynoRuntime: the loop itself, single-threaded: start(), then
+                      run(next_command) in the caller's thread (commands: start / stop / exit);
+                      phases IDLE / ENTERING / RUNNING / STOPPING; callbacks on_sample /
+                      on_message / on_run_finished; Sample, RunResult; shutdown_timeout_s()
+  runtime_process.py  RuntimeProcess: runs a DynoRuntime in its own "control process" (spawn)
+                      and is the GUI's handle to it: same controls + poll(); command/event
+                      queues; the loop runs in the child's main thread; child ignores Ctrl+C,
+                      shuts the drive down if the GUI dies
   run_log.py          RunLog: one CSV per run in logs/ (# header lines + COLUMNS)
   validation.py       torque_error (estimate vs command in force = previous cycle), error_stats
 gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
-  trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh()
+  trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh();
+                      max_points = live rolling window (thin pens), unset = full data (results)
   profile_editor.py   ProfileEditor: profile picker, fields generated from PARAMS
   telemetry_panel.py  TelemetryPanel: label/value grid
-  dyno_window.py      DynoWindow + RuntimeBridge (runtime callbacks -> Qt signals)
+  dyno_window.py      DynoWindow: one GUI timer calls runtime.poll() then redraws live plots
 utils/                generic helpers, no hardware knowledge
   mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
   timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
@@ -80,9 +86,13 @@ Layering rules (keep these when adding scripts):
   or the final app will need goes into `hardware/` (device-specific), `control/` (dyno
   logic), `gui/` (widgets) or `utils/` (generic). New areas get their own top-level
   folder only when they are actually written — keep the structure generic and simple.
-- Once a DynoRuntime is started, only its worker thread touches the C2000. The GUI
-  only calls `start_run(profile, save_log)` / `request_stop()` and receives data via callbacks
-  (bridged to Qt signals); the loop never waits for the GUI.
+- With a GUI, the loop runs in its own process (`RuntimeProcess`), never as a thread of
+  the GUI process: threads of one process share the GIL, and GUI work then stalls the loop
+  and skews encoder timestamps (seen on the rig: cycles 150-370 ms, alternating RPM noise
+  after ~30 s of growing plots). Only the control process opens the serial port, and only
+  DynoRuntime.run() (its main thread) touches the C2000. The GUI only calls
+  `start_run(profile, save_log)` / `request_stop()` / `poll()` on `RuntimeProcess`; the loop
+  never waits for the GUI. Scripts without a GUI may call DynoRuntime.run() directly.
 - Torque profiles return raw targets; the runtime clamps to the config limits and owns
   slewing (enter profile / stop) at `TORQUE_SLEW_NM_PER_S`.
 - Torque is N·m everywhere above the drive (profiles, runtime, CSV, GUI); % exists only
@@ -106,9 +116,12 @@ python test_01_vfd_core.py       # Python 3.11; PySide6-Essentials + pyqtgraph f
 No hardware is available to the assistant: verify changes by compiling and by driving
 scripts with a fake `minimalmodbus.Instrument` (patch the class, script reads, record
 writes), and ask the user to run on the rig. For GUI scripts, run with
-`QT_QPA_PLATFORM=offscreen`, patch `C2000.connect` to return a fake drive object, and
-drive the window with `QTimer.singleShot` clicks; `window.grab().save(...)` gives a
-screenshot to check.
+`QT_QPA_PLATFORM=offscreen`, pass `RuntimeProcess(vfd_factory=...)` an importable
+module-level function that returns `C2000(fake_instrument)` (patching `C2000.connect` does not
+reach the spawned control process; nor do changes to `config` made in the parent - e.g. use
+`save_log=False` rather than redirecting LOG_DIR), keep test scripts' top-level code under
+`if __name__ == "__main__":`, and drive the window with `QTimer.singleShot` clicks;
+`window.grab().save(...)` gives a screenshot to check.
 
 ## Git
 
@@ -142,9 +155,12 @@ in `README.md`; keep its script table in step with the plan.
    **Loop rate:** measured 4 Hz on the rig with ~12 transactions/cycle (~20 ms each: C2000
    RTU frames use >= 10 ms silent intervals + Pr.09-09 delay). Fixed with block reads:
    `read_cycle()` = 222CH-222DH + 2200H-2209H + 2101H-2103H, 211FH cached, + torque write =
-   4 transactions/cycle (~10 Hz simulated at 20 ms each, i.e. little headroom). The block
-   reads work on the rig; the loop rate there is still to be confirmed. If still short:
-   status block at ~1 Hz, Pr.09-09 -> 0, USB adapter (FTDI) latency timer.
+   4 transactions/cycle; on the rig cycle_time was ~45-70 ms for the first ~30 s. Then the
+   loop slowed (150-370 ms) and RPM got noisy: GIL contention with the growing live plots
+   (same process). Fixed by `RuntimeProcess` (loop in its own process) + bounded live plots;
+   offline the loop now holds 10.0 Hz with flat RPM noise even with unbounded plots. To be
+   confirmed on the rig. Further headroom if ever needed: status block at ~1 Hz, Pr.09-09
+   -> 0, USB adapter (FTDI) latency timer.
 8. Next: drivecycle / road-load simulation (Mode C) as a profile that plugs into the
    same runtime. Polynomial (Mode B) and T = k/ω profiles are not written yet.
 9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
@@ -155,7 +171,8 @@ in `README.md`; keep its script table in step with the plan.
 - Before RUN or fault reset: Python must be commanding STOP and 0 % torque.
 - Comm loss: Pr.09-02 = 2 (fault + coast) with Pr.09-03 timeout — intended 1.0 s, but
   **currently 0.0 s (disabled) for testing**. A loop must keep talking to the drive
-  at ~10 Hz once the timeout is enabled.
+  at ~10 Hz once the timeout is enabled; with the loop in its own process the GUI can no
+  longer stall it, so enabling it is now a rig decision, not a software blocker.
 - Torque-mode speed limits are Pr.11-37/11-38 (% of Pr.01-00 = 100 Hz); they are speed
   regulation, not a fault — a separate software/hardware overspeed trip is still TODO.
 - Software caps on max torque, rpm and power are required in all modes (GUI warns when hit).

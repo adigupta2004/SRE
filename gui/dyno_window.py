@@ -1,13 +1,18 @@
 """
 DynoWindow: main window for running torque profiles on the dyno.
 
-It talks only to a control.runtime.DynoRuntime: start_run(profile, save_log) and
-request_stop(). Samples, messages and run results arrive from the runtime's
-worker thread through RuntimeBridge signals (queued into the GUI thread), so the
-control loop never waits for the GUI. Plots are redrawn on a GUI timer.
+It talks only to a control.runtime_process.RuntimeProcess - the handle to the
+control loop, which runs in its own process: start_run(profile, save_log),
+request_stop() and poll(). The window never touches the drive.
+
+One GUI timer drives everything: every UPDATE_MS it calls runtime.poll(), which
+delivers the samples, messages and run results that arrived from the control
+process by calling this window's handlers (in the GUI thread, so they may update
+widgets directly), and then redraws the live plots. How long the GUI takes for any
+of this has no effect on the control loop.
 """
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit, QPushButton,
                                QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
@@ -18,7 +23,13 @@ from gui.profile_editor import ProfileEditor
 from gui.telemetry_panel import TelemetryPanel
 from gui.trace_plot import TracePlot
 
-PLOT_REFRESH_MS = 100
+UPDATE_MS = 100        # GUI timer: take new events from the control process, then redraw live plots
+
+# Live plots show a rolling window, so a redraw costs the same at any point in a run.
+# The Results tab still plots the whole run. The window holds this many samples, so it
+# spans LIVE_WINDOW_S at the nominal loop rate (longer if the loop runs slower).
+LIVE_WINDOW_S = 30
+LIVE_POINTS = int(LIVE_WINDOW_S * config.LOOP_RATE_HZ)
 
 # Torque from the drive's electrical output power. Its offset must be stated wherever it is shown.
 TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate (incl. losses)"
@@ -43,21 +54,6 @@ TELEMETRY_FIELDS = [
 ]
 
 
-class RuntimeBridge(QObject):
-    """
-    Carries runtime callbacks (worker thread) into the GUI thread.
-
-    The runtime's callbacks are set to these signals' emit methods. The bridge
-    lives in the GUI thread, so Qt queues each emit and runs the connected slot
-    later in the GUI thread: emit returns immediately and the control loop never
-    waits for drawing. Qt widgets must only be touched from the GUI thread, so
-    the slots are the only place samples meet widgets.
-    """
-    sample = Signal(object)
-    message = Signal(str)
-    run_finished = Signal(object)
-
-
 def fmt(value, spec, unit=""):
     return "-" if value is None else f"{value:{spec}}{unit}"
 
@@ -70,14 +66,11 @@ class DynoWindow(QMainWindow):
         self._phase = IDLE
         self._close_pending = False
 
-        self._bridge = RuntimeBridge()
-        self._bridge.sample.connect(self._on_sample)
-        self._bridge.message.connect(self._log)
-        self._bridge.run_finished.connect(self._on_run_finished)
-        # From here on the runtime publishes through the bridge (see RuntimeBridge).
-        runtime.on_sample = self._bridge.sample.emit
-        runtime.on_message = self._bridge.message.emit
-        runtime.on_run_finished = self._bridge.run_finished.emit
+        # The runtime calls these from poll(), which only this window's timer calls,
+        # so they always run in the GUI thread.
+        runtime.on_sample = self._on_sample
+        runtime.on_message = self._log
+        runtime.on_run_finished = self._on_run_finished
 
         # ---- Left: controls, telemetry, messages ----
         self._editor = ProfileEditor(PROFILES)
@@ -115,11 +108,11 @@ class DynoWindow(QMainWindow):
         left_layout.addWidget(self._messages, stretch=1)
 
         # ---- Right: live and result plots ----
-        self._torque_plot = TracePlot("Torque", "time (s)", "torque (N·m)")
+        self._torque_plot = TracePlot("Torque", "time (s)", "torque (N·m)", max_points=LIVE_POINTS)
         self._torque_plot.add_trace("Command")
         self._torque_plot.add_trace("C2000 estimate")
         self._torque_plot.add_trace(TORQUE_ELEC_POWER_TRACE)
-        self._speed_plot = TracePlot("Speed", "time (s)", "speed (rpm)")
+        self._speed_plot = TracePlot("Speed", "time (s)", "speed (rpm)", max_points=LIVE_POINTS)
         self._speed_plot.add_trace("Encoder RPM")
         self._speed_plot.add_trace("C2000 RPM", dashed=True)
         live = QWidget()
@@ -155,8 +148,8 @@ class DynoWindow(QMainWindow):
         # Live plots are redrawn on this timer, not on every sample: drawing cost stays
         # fixed whatever the loop rate.
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh_plots)
-        self._timer.start(PLOT_REFRESH_MS)
+        self._timer.timeout.connect(self._on_timer)
+        self._timer.start(UPDATE_MS)
         self._update_buttons()
 
     # --------------------------------------------------------------------------
@@ -187,7 +180,7 @@ class DynoWindow(QMainWindow):
         event.accept()
 
     # --------------------------------------------------------------------------
-    # Runtime events (GUI thread)
+    # Runtime events (called from runtime.poll(), in the GUI thread)
     # --------------------------------------------------------------------------
     def _on_sample(self, s):
         # Every sample carries the runtime phase, so the buttons follow the runtime
@@ -265,6 +258,7 @@ class DynoWindow(QMainWindow):
         self._editor.setEnabled(idle)
         self._save_log.setEnabled(idle)
 
-    def _refresh_plots(self):
+    def _on_timer(self):
+        self.runtime.poll()           # calls _on_sample / _log / _on_run_finished for new events
         self._torque_plot.refresh()
         self._speed_plot.refresh()
