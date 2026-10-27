@@ -76,6 +76,7 @@ import queue
 import signal
 import time
 
+import config
 from control.runtime import IDLE, DynoRuntime, shutdown_timeout_s
 from hardware.c2000 import C2000
 
@@ -130,9 +131,13 @@ class RuntimeProcess:
             self._finished = True
             raise RuntimeError(detail or f"control process gave no answer within {START_TIMEOUT_S:g} s")
 
-    def start_run(self, profile, save_log=True):
-        """Step 2: queues a ("start", ...) command for DynoRuntime.run() in the control process."""
-        self._commands.put(("start", (profile, save_log)))
+    def start_run(self, profile, log_location=config.DEFAULT_LOG_LOCATION):
+        """
+        Step 2: queues a ("start", ...) command for DynoRuntime.run() in the control
+        process. The run's CSV goes into <log_location>/logs; None = no CSV (the
+        results are still sent back).
+        """
+        self._commands.put(("start", (profile, log_location)))
 
     def request_stop(self, reason="Stop requested"):
         """Queues a ("stop", reason) command for DynoRuntime.run() in the control process."""

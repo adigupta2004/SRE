@@ -7,6 +7,7 @@ hardware/registers.py.
 """
 
 import math
+import os
 
 import serial
 
@@ -57,8 +58,11 @@ TORQUE_SLEW_NM_PER_S = 5.0
 # controlled shutdown is started.
 MAX_CONSECUTIVE_COMM_ERRORS = 3
 
-# CSV run logs are written here (one file per run).
-LOG_DIR = "logs"
+# CSV run logs: one file per run, in a LOG_FOLDER_NAME folder created inside the log
+# location. The location is chosen in the GUI ("Browse..."); it starts at
+# DEFAULT_LOG_LOCATION, the project root (absolute, whatever folder a script is run from).
+LOG_FOLDER_NAME = "logs"
+DEFAULT_LOG_LOCATION = os.path.dirname(os.path.abspath(__file__))
 
 # ==============================================================================
 # COMMISSIONING LIMITS (runtime)

@@ -2,7 +2,7 @@
 DynoWindow: main window for running torque profiles on the dyno.
 
 It talks only to a control.runtime_process.RuntimeProcess - the handle to the
-control loop, which runs in its own process: start_run(profile, save_log),
+control loop, which runs in its own process: start_run(profile, log_location),
 request_stop() and poll(). The window never touches the drive.
 
 One GUI timer drives everything: every UPDATE_MS it calls runtime.poll(), which
@@ -13,7 +13,7 @@ of this has no effect on the control loop.
 """
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QPushButton,
                                QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 import config
@@ -31,11 +31,8 @@ UPDATE_MS = 100        # GUI timer: take new events from the control process, th
 LIVE_WINDOW_S = 30
 LIVE_POINTS = int(LIVE_WINDOW_S * config.LOOP_RATE_HZ)
 
-# Torque from the drive's electrical output power. Its offset must be stated wherever it is shown.
-TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate (incl. losses)"
-TORQUE_ELEC_POWER_NOTE = ("Torque est. elec. P/ω = drive electrical output power / shaft speed. It includes "
-                   "the dyno motor's losses, so it reads about losses/ω more positive than the shaft "
-                   "torque (in regen: less negative). Blank below the min run RPM.")
+# Torque from the drive's electrical output power / shaft speed (see Sample.torque_elec_power_nm).
+TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate"
 
 TELEMETRY_FIELDS = [
     ("phase", "Phase"),
@@ -44,7 +41,7 @@ TELEMETRY_FIELDS = [
     ("c2000_rpm", "C2000 RPM"),
     ("torque_command", "Torque command"),
     ("torque_c2000", "Torque est. C2000"),
-    ("torque_elec_power", "Torque est. elec. P/ω *"),
+    ("torque_elec_power", "Torque est. elec. P/ω"),
     ("current", "Current"),
     ("power", "Output power"),
     ("dc_bus", "DC bus"),
@@ -81,12 +78,21 @@ class DynoWindow(QMainWindow):
         buttons = QHBoxLayout()
         buttons.addWidget(self._start)
         buttons.addWidget(self._stop)
-        self._save_log = QCheckBox("Save CSV log")      # applies from the next Start; locked during a run
+        # CSV logging: applies from the next Start; locked during a run. Each run's CSV
+        # goes into a "logs" folder inside the chosen location (default: project root).
+        self._save_log = QCheckBox("Save CSV log")
         self._save_log.setChecked(True)
+        self._save_log.toggled.connect(lambda _: self._update_buttons())
+        self._log_location = QLineEdit(readOnly=True)
+        self._browse = QPushButton("Browse…")
+        self._browse.clicked.connect(self._on_browse)
+        self._set_log_location(config.DEFAULT_LOG_LOCATION)
+        log_row = QHBoxLayout()       # [x] Save CSV log ......... [Browse…]; full path on the line below
+        log_row.addWidget(self._save_log)
+        log_row.addStretch()
+        log_row.addWidget(self._browse)
 
         self._telemetry = TelemetryPanel("Telemetry", TELEMETRY_FIELDS)
-        torque_elec_power_note = QLabel(f"<i>* {TORQUE_ELEC_POWER_NOTE}</i>")
-        torque_elec_power_note.setWordWrap(True)
         self._messages = QPlainTextEdit(readOnly=True)
         self._messages.setMaximumBlockCount(500)
 
@@ -100,10 +106,10 @@ class DynoWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(self._editor)
         left_layout.addLayout(buttons)
-        left_layout.addWidget(self._save_log)
+        left_layout.addLayout(log_row)
+        left_layout.addWidget(self._log_location)
         left_layout.addWidget(limits)
         left_layout.addWidget(self._telemetry)
-        left_layout.addWidget(torque_elec_power_note)
         left_layout.addWidget(QLabel("Messages"))
         left_layout.addWidget(self._messages, stretch=1)
 
@@ -164,7 +170,14 @@ class DynoWindow(QMainWindow):
         self._torque_plot.clear()
         self._speed_plot.clear()
         self._tabs.setCurrentIndex(0)
-        self.runtime.start_run(profile, save_log=self._save_log.isChecked())
+        log_location = self._log_location.text() if self._save_log.isChecked() else None
+        self.runtime.start_run(profile, log_location)
+
+    def _on_browse(self):
+        location = QFileDialog.getExistingDirectory(
+            self, "Choose where to create the logs folder", self._log_location.text())
+        if location:                  # empty if the dialog was cancelled
+            self._set_log_location(location)
 
     def closeEvent(self, event):
         # Two-step close during a run: the first close asks the runtime to stop and keeps
@@ -236,10 +249,7 @@ class DynoWindow(QMainWindow):
             f"<b>{r.profile}</b><br>"
             f"Stopped: {r.reason} | Duration {r.duration_s:.1f} s | Mean loop rate {loop_hz:.1f} Hz | "
             f"Overruns {r.overruns}/{len(r.samples)} cycles<br>"
-            f"CSV: {r.log_path or 'not saved'}<br>{stats}<br>"
-            f"<i>Error = C2000 estimate - command in force when read, over the RUNNING phase. "
-            f"The C2000 estimate is the drive's internal model, not an independent torque measurement. "
-            f"{TORQUE_ELEC_POWER_TRACE} is plotted but not scored: {TORQUE_ELEC_POWER_NOTE}</i>"
+            f"CSV: {r.log_path or 'not saved'}<br>{stats}"
         )
         self._tabs.setCurrentIndex(1)
         if self._close_pending:
@@ -257,6 +267,13 @@ class DynoWindow(QMainWindow):
         self._stop.setEnabled(not idle)
         self._editor.setEnabled(idle)
         self._save_log.setEnabled(idle)
+        logging = idle and self._save_log.isChecked()
+        self._log_location.setEnabled(logging)
+        self._browse.setEnabled(logging)
+
+    def _set_log_location(self, location):
+        self._log_location.setText(location)
+        self._log_location.setToolTip(f"CSV files go into {location}/{config.LOG_FOLDER_NAME}")
 
     def _on_timer(self):
         self.runtime.poll()           # calls _on_sample / _log / _on_run_finished for new events

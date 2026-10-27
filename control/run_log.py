@@ -1,8 +1,10 @@
 """
-CSV run log: one timestamped file per run.
+CSV run log: one timestamped file per run, in <location>/LOG_FOLDER_NAME (created if
+needed). The location is chosen by the user; it defaults to config.DEFAULT_LOG_LOCATION.
 
-Lines starting with '#' record the test conditions; then one header row and one
-row per runtime cycle. Column names match the runtime Sample fields.
+Two '#' lines identify the run (start time, profile); then one header row and one
+row per runtime cycle. Column names match the runtime Sample fields; torque in N·m
+(signed), rpm signed (+ = forward), power in kW (negative = regenerating), times in s.
 """
 
 import csv
@@ -25,7 +27,9 @@ COLUMNS = [
     "filtered_rpm",
     "c2000_rpm",
     "torque_c2000_nm",       # 2208H converted with the motor rated torque (drive's own estimate)
-    "torque_elec_power_nm",  # output power / filtered rpm: includes motor losses (see header)
+    "torque_elec_power_nm",  # output power / filtered rpm (2206H, 0.1 kW steps): includes the dyno
+                             # motor's losses, so offset by about +losses/ω vs the shaft torque;
+                             # blank below MIN_RUN_RPM; not used in the error statistics
     "current_a",
     "output_power_kw",
     "dc_bus_v",
@@ -44,29 +48,15 @@ def _cell(value):
 
 
 class RunLog:
-    def __init__(self, profile, directory=config.LOG_DIR):
+    def __init__(self, profile, location=config.DEFAULT_LOG_LOCATION):
+        directory = os.path.join(location, config.LOG_FOLDER_NAME)
         os.makedirs(directory, exist_ok=True)
         now = datetime.datetime.now()
         slug = re.sub(r"\W+", "_", profile.NAME).strip("_").lower()
         self.path = os.path.join(directory, f"run_{now:%Y%m%d_%H%M%S}_{slug}.csv")
         self._file = open(self.path, "w", newline="")
-        for line in (
-            f"Dyno run log - started {now:%Y-%m-%d %H:%M:%S}",
-            f"Profile: {profile.describe()}",
-            f"Torque limits: {config.TORQUE_LIMIT_MIN_NM:.2f} .. {config.TORQUE_LIMIT_MAX_NM:.2f} Nm "
-            f"| Max |rpm|: {config.MAX_ABS_RPM:g} | Min run rpm: {config.MIN_RUN_RPM:g} "
-            f"| Slew: {config.TORQUE_SLEW_NM_PER_S:g} Nm/s | Loop: {config.LOOP_RATE_HZ:g} Hz",
-            f"Torque scaling: Pr.11-27 = {config.PR_11_27_PCT:g} % "
-            f"| command 100 % (Pr.11-34) = {config.TORQUE_REFERENCE_NM:.2f} Nm "
-            f"| estimate 100 % (2208H) = motor rated torque = {config.MOTOR_RATED_TORQUE_NM:.2f} Nm",
-            "Units: time s; torque Nm (signed); rpm signed (+ = forward); "
-            "power kW (negative = regenerating)",
-            "torque_elec_power_nm = drive ELECTRICAL output power (2206H; 0.1 kW steps) / filtered "
-            "shaft speed. It includes the dyno motor's losses so it is offset by about +losses/w vs "
-            "the shaft torque (in regen it reads less negative). Blank below the min run rpm. "
-            "Not used in the error statistics.",
-        ):
-            self._file.write(f"# {line}\n")
+        self._file.write(f"# Dyno run {now:%Y-%m-%d %H:%M:%S}\n")
+        self._file.write(f"# Profile: {profile.describe()}\n")
         self._writer = csv.writer(self._file)
         self._writer.writerow(COLUMNS)
 

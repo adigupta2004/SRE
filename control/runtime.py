@@ -117,7 +117,8 @@ class DynoRuntime:
     the runtime's state and no locks are needed.
 
     Commands are (kind, arg) tuples:
-        ("start", (profile, save_log))   start a run (save_log=False: no CSV, results still kept)
+        ("start", (profile, log_location))  start a run; its CSV goes into <log_location>/logs
+                                            (log_location None: no CSV, results still kept)
         ("stop", reason)                 controlled stop of the active run
         ("exit", None)                   stop any active run, then return from run()
     """
@@ -225,7 +226,7 @@ class DynoRuntime:
                     self._exit_deadline = time.monotonic() + shutdown_timeout_s()
                 self._begin_stop("Runtime closing")
 
-    def _start_run(self, profile, save_log):
+    def _start_run(self, profile, log_location):
         # Refuse a start while closing, during a run, or without the MUT driving the shaft
         # forward (opposing torque on an undriven shaft would spin it backwards).
         if self._exiting:
@@ -240,8 +241,8 @@ class DynoRuntime:
             return
         log = None
         try:
-            if save_log:
-                log = RunLog(profile)           # before RUN, so a log failure cannot strand the drive
+            if log_location is not None:
+                log = RunLog(profile, log_location)   # before RUN, so a log failure cannot strand the drive
             self.vfd.set_torque_nm(0.0)
             self.vfd.run()                      # torque mode: no FWD/REV bits
         except Exception as e:

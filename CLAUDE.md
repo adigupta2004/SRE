@@ -61,7 +61,7 @@ control/              dyno control logic: no Modbus details, no GUI code
                       and is the GUI's handle to it: same controls + poll(); command/event
                       queues; the loop runs in the child's main thread; child ignores Ctrl+C,
                       shuts the drive down if the GUI dies
-  run_log.py          RunLog: one CSV per run in logs/ (# header lines + COLUMNS)
+  run_log.py          RunLog: one CSV per run in <log location>/logs/ (2 '#' lines + COLUMNS)
   validation.py       torque_error (estimate vs command in force = previous cycle), error_stats
 gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
   trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh();
@@ -91,7 +91,7 @@ Layering rules (keep these when adding scripts):
   and skews encoder timestamps (seen on the rig: cycles 150-370 ms, alternating RPM noise
   after ~30 s of growing plots). Only the control process opens the serial port, and only
   DynoRuntime.run() (its main thread) touches the C2000. The GUI only calls
-  `start_run(profile, save_log)` / `request_stop()` / `poll()` on `RuntimeProcess`; the loop
+  `start_run(profile, log_location)` / `request_stop()` / `poll()` on `RuntimeProcess`; the loop
   never waits for the GUI. Scripts without a GUI may call DynoRuntime.run() directly.
 - Torque profiles return raw targets; the runtime clamps to the config limits and owns
   slewing (enter profile / stop) at `TORQUE_SLEW_NM_PER_S`.
@@ -118,8 +118,8 @@ scripts with a fake `minimalmodbus.Instrument` (patch the class, script reads, r
 writes), and ask the user to run on the rig. For GUI scripts, run with
 `QT_QPA_PLATFORM=offscreen`, pass `RuntimeProcess(vfd_factory=...)` an importable
 module-level function that returns `C2000(fake_instrument)` (patching `C2000.connect` does not
-reach the spawned control process; nor do changes to `config` made in the parent - e.g. use
-`save_log=False` rather than redirecting LOG_DIR), keep test scripts' top-level code under
+reach the spawned control process; nor do changes to `config` made in the parent - pass a
+temporary folder as `start_run(..., log_location)` or None instead), keep test scripts' top-level code under
 `if __name__ == "__main__":`, and drive the window with `QTimer.singleShot` clicks;
 `window.grab().save(...)` gives a screenshot to check.
 
@@ -150,8 +150,12 @@ in `README.md`; keep its script table in step with the plan.
    MIN_RUN_RPM, implausible encoder, MAX_CONSECUTIVE_COMM_ERRORS. Validation statistics
    are only bias, MAE and max |error| (user asked for nothing more), for the C2000 estimate
    only. A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
-   plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω), and
-   that caveat must be stated wherever it is shown (code, CSV header, GUI).
+   plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω). That
+   caveat is stated in the code only (Sample and run_log COLUMNS comments); the GUI and the
+   CSV stay minimal (user's choice: no caveats or notes in the window; CSV header = two
+   '#' lines, start time and profile).
+   CSV logs go into `<log location>/logs/`; the location is chosen in the GUI (Browse…),
+   default `config.DEFAULT_LOG_LOCATION` = project root, not remembered between sessions.
    **Loop rate:** measured 4 Hz on the rig with ~12 transactions/cycle (~20 ms each: C2000
    RTU frames use >= 10 ms silent intervals + Pr.09-09 delay). Fixed with block reads:
    `read_cycle()` = 222CH-222DH + 2200H-2209H + 2101H-2103H, 211FH cached, + torque write =
