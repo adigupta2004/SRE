@@ -68,9 +68,13 @@ OTHER EFFECTS OF THE SPLIT
       (fork would copy the GUI process's Qt state). It re-imports the launching
       script's modules, so startup takes ~1-2 s longer, and the launching script must
       keep its top-level code under `if __name__ == "__main__":`.
-    - Always call close(): a non-daemonic child keeps the GUI process from exiting.
+    - At exit, Python waits for the control process, and the control process only
+      stops when told to (or when the GUI process is gone): an exit that skipped
+      close() would wait forever. So start() also registers close() to run at
+      interpreter exit; calling close() yourself first is still the normal path.
 """
 
+import atexit
 import multiprocessing as mp
 import queue
 import signal
@@ -130,6 +134,10 @@ class RuntimeProcess:
             self._process.join(EXIT_MARGIN_S)
             self._finished = True
             raise RuntimeError(detail or f"control process gave no answer within {START_TIMEOUT_S:g} s")
+        # Registered after multiprocessing's own exit hook, so it runs first: an exit that
+        # skipped close() (e.g. an exception) still shuts the control process down instead
+        # of waiting for it forever. A second close() returns at once.
+        atexit.register(self.close)
 
     def start_run(self, profile, log_location=config.DEFAULT_LOG_LOCATION):
         """

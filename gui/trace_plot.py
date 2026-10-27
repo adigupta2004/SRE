@@ -6,14 +6,22 @@ the owner calls refresh() from a GUI timer so redraw cost is independent of the
 data rate.
 
 Live plots pass max_points: each trace then keeps only its newest max_points
-points (a rolling window) and is drawn with thin, non-antialiased lines. Every
-refresh redraws a whole trace, so without this the cost of a redraw - and the time
-the GUI spends on it - would grow for as long as a run lasts. Results plots leave
-max_points unset: they keep all their data and are drawn once.
+points (a rolling window). Every refresh redraws a whole trace, so without this the
+cost of a redraw - and the time the GUI spends on it - would grow for as long as a
+run lasts.
+
+Without max_points the plot shows whole data sets given with set_data() (e.g. a run
+log of many hours): the arrays are kept as given, not copied, and pyqtgraph draws a
+downsampled version of only the visible range, so even very long traces stay fast.
+
+All traces are drawn with 1-px antialiased lines: Qt draws wide antialiased lines
+about 200x slower (a 10-hour trace: ~4 s per repaint at 2 px, ~0.02 s at 1 px).
+Blank values (NaN) break a trace instead of being drawn.
 """
 
 from collections import deque
 
+import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QVBoxLayout, QWidget
@@ -34,6 +42,9 @@ class TracePlot(QWidget):
             self._plot.getAxis(axis).enableAutoSIPrefix(False)    # no "(x0.001)" rescaling
         self._plot.showGrid(x=True, y=True, alpha=0.3)
         self._plot.addLegend(offset=(10, 10))
+        if max_points is None:
+            self._plot.setDownsampling(auto=True, mode="peak")    # keeps spikes visible
+            self._plot.setClipToView(True)
 
         self._toggles = QHBoxLayout()
         self._toggles.addStretch()
@@ -43,14 +54,13 @@ class TracePlot(QWidget):
         layout.addLayout(self._toggles)
 
         self._curves = {}          # trace name -> pyqtgraph curve
-        self._data = {}            # trace name -> (xs, ys) deques; append() only adds here
+        self._data = {}            # trace name -> (xs, ys): deques (append) or arrays (set_data)
         self._dirty = set()        # traces changed since the last refresh(), i.e. need a redraw
 
     def add_trace(self, name, color=None, dashed=False):
         color = color or DEFAULT_COLORS[len(self._curves) % len(DEFAULT_COLORS)]
-        live = self._max_points is not None
-        pen = pg.mkPen(color, width=1 if live else 2, style=Qt.DashLine if dashed else Qt.SolidLine)
-        self._curves[name] = self._plot.plot([], [], name=name, pen=pen, antialias=not live)
+        pen = pg.mkPen(color, width=1, style=Qt.DashLine if dashed else Qt.SolidLine)
+        self._curves[name] = self._plot.plot([], [], name=name, pen=pen, connect="finite")
         self._data[name] = self._new_buffers()
 
         toggle = QCheckBox(name)
@@ -72,13 +82,14 @@ class TracePlot(QWidget):
         self._dirty.add(name)
 
     def set_data(self, name, xs, ys):
-        self._data[name] = self._new_buffers(xs, ys)
+        """Replaces a trace's data in one go; arrays are kept as given (no copy)."""
+        self._data[name] = (xs, ys)
         self._dirty.add(name)
 
     def refresh(self):
         for name in self._dirty:
             xs, ys = self._data[name]
-            self._curves[name].setData(list(xs), list(ys))
+            self._curves[name].setData(np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
         self._dirty.clear()
 
     def clear(self):
@@ -88,6 +99,6 @@ class TracePlot(QWidget):
         self._dirty.clear()
         self._plot.enableAutoRange()
 
-    def _new_buffers(self, xs=(), ys=()):
-        """x and y buffers; with max_points set, the oldest points drop out automatically."""
-        return deque(xs, maxlen=self._max_points), deque(ys, maxlen=self._max_points)
+    def _new_buffers(self):
+        """x and y buffers for append(); with max_points set, the oldest points drop out."""
+        return deque(maxlen=self._max_points), deque(maxlen=self._max_points)

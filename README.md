@@ -41,7 +41,7 @@ and `utils/` work without any setup.
 | `test_01_vfd_core.py` | Done (speed control) | Interactive menu: RUN / STOP / fault reset, speed (Hz) or torque (%) target, telemetry readout. The control mode chosen in the script must match Pr.00-10 on the keypad. |
 | `test_02_encoder.py` | Done | **Read-only** shaft-speed monitor: live signed RPM from the encoder, compared with the C2000's own estimate. Mode 1 also checks the encoder scaling while you turn the shaft slowly by hand. Never sends commands to the drive. |
 | `test_03_coupled_torque.py` | Done | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
-| `test_04_torque_runtime.py` | Written, to be run on the rig | GUI test of the reusable ~10 Hz runtime: choose a torque profile (constant, ramp, step, linear vs RPM), Torque is entered, plotted and logged in N·m. Start → 0 N·m + RUN → slew into the profile → run with live torque and speed plots → Stop or profile end → ramp to 0, write 0 N·m, STOP. Refuses to start if Pr.11-27 on the drive differs from `config.PR_11_27_PCT` (the N·m scaling depends on it). Writes one CSV per run into a `logs/` folder at the chosen log location ("Save CSV log" checkbox, on by default; "Browse…" to choose the location, default the project root) and shows commanded torque against two estimates: the C2000's own (scored: error plot and bias / MAE / max error) and electrical output power / shaft speed (plotted only; it includes the dyno motor's losses, so it reads about losses/ω more positive than the shaft torque). Limits are in `config.py` (COMMISSIONING LIMITS). |
+| `test_04_torque_runtime.py` | Written, to be run on the rig | GUI test of the reusable ~10 Hz runtime: choose a torque profile (constant, ramp, step, linear vs RPM), Torque is entered, plotted and logged in N·m. Start → 0 N·m + RUN → slew into the profile → run with live torque and speed plots → Stop or profile end → ramp to 0, write 0 N·m, STOP. Refuses to start if Pr.11-27 on the drive differs from `config.PR_11_27_PCT` (the N·m scaling depends on it). Writes one CSV per run into a `logs/` folder at the chosen log location ("Save CSV log" checkbox, on by default; "Browse…" to choose the location, default the project root) and shows commanded torque against two estimates: the C2000's own (scored: error plot and bias / MAE / max error) and electrical output power / shaft speed (plotted only; it includes the dyno motor's losses, so it reads about losses/ω more positive than the shaft torque). Results are read back from the CSV, and "Open CSV…" shows any older run log; without a drive connected the window opens as a log viewer only. Limits are in `config.py` (COMMISSIONING LIMITS). |
 | `test_05_…` | Planned | Drivecycle / road-load simulation |
 | `dyno_app.py` | Planned | Final GUI |
 
@@ -76,13 +76,14 @@ control/           dyno control logic, no Modbus and no GUI code
   torque_profiles.py   torque target vs time and RPM (constant, ramp, step, linear vs RPM)
   runtime.py       the ~10 Hz read -> profile -> limits -> command -> log loop
   runtime_process.py  runs that loop in its own process so the GUI cannot slow it down
-  run_log.py       one CSV file per run in logs/
+  run_log.py       one CSV file per run in logs/ (and reads them back)
   validation.py    commanded vs estimated torque error: bias, MAE, max error
 gui/               reusable PySide6 + pyqtgraph widgets; never talks to the hardware
   trace_plot.py    named traces, legend, show/hide, autoscale, clear
+  log_view.py      viewer for saved run logs (used by the Results tab)
   profile_editor.py    profile picker with fields generated from each profile
   telemetry_panel.py   live label/value grid
-  dyno_window.py   main window for running profiles
+  dyno_window.py   main window for running profiles; also a log viewer
 utils/             generic helpers with no hardware knowledge
   mathutils.py     counter arithmetic, unit conversion, low-pass filter
   timing.py        fixed-rate loop timing

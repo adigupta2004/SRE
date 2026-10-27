@@ -1,9 +1,15 @@
 """
-DynoWindow: main window for running torque profiles on the dyno.
+DynoWindow: main window for running torque profiles on the dyno, and a viewer for
+run logs.
 
 It talks only to a control.runtime_process.RuntimeProcess - the handle to the
 control loop, which runs in its own process: start_run(profile, log_location),
-request_stop() and poll(). The window never touches the drive.
+request_stop() and poll(). The window never touches the drive. Without a runtime
+(drive not connected) it opens as a log viewer: running is disabled, and the
+Results tab can still open any saved run log.
+
+The Results tab is a LogView (gui/log_view.py), which owns everything about
+results: this window only hands it each finished run.
 
 One GUI timer drives everything: every UPDATE_MS it calls runtime.poll(), which
 delivers the samples, messages and run results that arrived from the control
@@ -19,6 +25,7 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLin
 import config
 from control.runtime import IDLE
 from control.torque_profiles import PROFILES
+from gui.log_view import TORQUE_ELEC_POWER_TRACE, LogView
 from gui.profile_editor import ProfileEditor
 from gui.telemetry_panel import TelemetryPanel
 from gui.trace_plot import TracePlot
@@ -30,9 +37,6 @@ UPDATE_MS = 100        # GUI timer: take new events from the control process, th
 # spans LIVE_WINDOW_S at the nominal loop rate (longer if the loop runs slower).
 LIVE_WINDOW_S = 30
 LIVE_POINTS = int(LIVE_WINDOW_S * config.LOOP_RATE_HZ)
-
-# Torque from the drive's electrical output power / shaft speed (see Sample.torque_elec_power_nm).
-TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate"
 
 TELEMETRY_FIELDS = [
     ("phase", "Phase"),
@@ -56,18 +60,20 @@ def fmt(value, spec, unit=""):
 
 
 class DynoWindow(QMainWindow):
-    def __init__(self, runtime):
+    def __init__(self, runtime, startup_error=None):
+        """runtime: a started RuntimeProcess, or None to open as a log viewer only."""
         super().__init__()
-        self.setWindowTitle("Dyno - Torque Runtime")
+        self.setWindowTitle("Dyno - Torque Runtime" if runtime else "Dyno - Log Viewer (drive not connected)")
         self.runtime = runtime
         self._phase = IDLE
         self._close_pending = False
 
         # The runtime calls these from poll(), which only this window's timer calls,
         # so they always run in the GUI thread.
-        runtime.on_sample = self._on_sample
-        runtime.on_message = self._log
-        runtime.on_run_finished = self._on_run_finished
+        if runtime is not None:
+            runtime.on_sample = self._on_sample
+            runtime.on_message = self._log
+            runtime.on_run_finished = self._on_run_finished
 
         # ---- Left: controls, telemetry, messages ----
         self._editor = ProfileEditor(PROFILES)
@@ -126,23 +132,11 @@ class DynoWindow(QMainWindow):
         live_layout.addWidget(self._torque_plot)
         live_layout.addWidget(self._speed_plot)
 
-        self._summary = QLabel("No run yet.")
-        self._summary.setWordWrap(True)
-        self._compare_plot = TracePlot("Torque comparison", "time (s)", "torque (N·m)")
-        self._compare_plot.add_trace("Command")
-        self._compare_plot.add_trace("C2000 estimate")
-        self._compare_plot.add_trace(TORQUE_ELEC_POWER_TRACE)
-        self._error_plot = TracePlot("Torque error (estimate - command)", "time (s)", "error (N·m)")
-        self._error_plot.add_trace("Error", color="#d62728")
-        results = QWidget()
-        results_layout = QVBoxLayout(results)
-        results_layout.addWidget(self._summary)
-        results_layout.addWidget(self._compare_plot)
-        results_layout.addWidget(self._error_plot)
+        self._results = LogView()
 
         self._tabs = QTabWidget()
         self._tabs.addTab(live, "Live")
-        self._tabs.addTab(results, "Results")
+        self._tabs.addTab(self._results, "Results")
 
         splitter = QSplitter()
         splitter.addWidget(left)
@@ -157,6 +151,11 @@ class DynoWindow(QMainWindow):
         self._timer.timeout.connect(self._on_timer)
         self._timer.start(UPDATE_MS)
         self._update_buttons()
+        if startup_error:
+            self._log(f"[ERROR] Drive not connected: {startup_error}")
+            self._log("Log viewer only: use Open CSV… on the Results tab. "
+                      "Restart the script to run the dyno.")
+            self._tabs.setCurrentIndex(1)
 
     # --------------------------------------------------------------------------
     # User actions
@@ -184,7 +183,7 @@ class DynoWindow(QMainWindow):
         # the window open; _on_run_finished closes it once STOP has been sent. A second
         # close (e.g. if the drive stopped responding) closes immediately; the script
         # then still calls runtime.close(), which keeps trying to finish the shutdown.
-        if self.runtime.active and not self._close_pending:
+        if self.runtime is not None and self.runtime.active and not self._close_pending:
             self._close_pending = True
             self.runtime.request_stop("Window closed")
             self._log("Stopping the run; the window closes after STOP (close again to force).")
@@ -228,29 +227,7 @@ class DynoWindow(QMainWindow):
         self._phase = IDLE
         self._update_buttons()
         self._telemetry.set_values({"phase": IDLE})
-        times = [s.elapsed_time for s in r.samples]
-        self._compare_plot.clear()
-        self._compare_plot.set_data("Command", times, [s.torque_command_nm for s in r.samples])
-        self._compare_plot.set_data("C2000 estimate", times, [s.torque_c2000_nm for s in r.samples])
-        self._compare_plot.set_data(TORQUE_ELEC_POWER_TRACE, times, [s.torque_elec_power_nm for s in r.samples])
-        self._error_plot.clear()
-        self._error_plot.set_data("Error", r.error_times, r.errors)
-        self._compare_plot.refresh()
-        self._error_plot.refresh()
-
-        loop_hz = 1.0 / r.mean_loop_dt if r.mean_loop_dt else 0.0
-        if r.stats:
-            stats = (f"<b>Bias (mean error):</b> {r.stats.bias:+.2f} N·m &nbsp; "
-                     f"<b>Mean absolute error:</b> {r.stats.mae:.2f} N·m &nbsp; "
-                     f"<b>Max absolute error:</b> {r.stats.max_abs:.2f} N·m &nbsp; ({r.stats.n} samples)")
-        else:
-            stats = "<b>No RUNNING-phase data</b> - statistics not available."
-        self._summary.setText(
-            f"<b>{r.profile}</b><br>"
-            f"Stopped: {r.reason} | Duration {r.duration_s:.1f} s | Mean loop rate {loop_hz:.1f} Hz | "
-            f"Overruns {r.overruns}/{len(r.samples)} cycles<br>"
-            f"CSV: {r.log_path or 'not saved'}<br>{stats}"
-        )
+        self._results.show_run(r)
         self._tabs.setCurrentIndex(1)
         if self._close_pending:
             self.close()
@@ -262,12 +239,13 @@ class DynoWindow(QMainWindow):
         self._messages.appendPlainText(text)
 
     def _update_buttons(self):
+        connected = self.runtime is not None      # without a drive: viewer only
         idle = self._phase == IDLE
-        self._start.setEnabled(idle)
-        self._stop.setEnabled(not idle)
-        self._editor.setEnabled(idle)
-        self._save_log.setEnabled(idle)
-        logging = idle and self._save_log.isChecked()
+        self._start.setEnabled(connected and idle)
+        self._stop.setEnabled(connected and not idle)
+        self._editor.setEnabled(connected and idle)
+        self._save_log.setEnabled(connected and idle)
+        logging = connected and idle and self._save_log.isChecked()
         self._log_location.setEnabled(logging)
         self._browse.setEnabled(logging)
 
@@ -276,6 +254,7 @@ class DynoWindow(QMainWindow):
         self._log_location.setToolTip(f"CSV files go into {location}/{config.LOG_FOLDER_NAME}")
 
     def _on_timer(self):
-        self.runtime.poll()           # calls _on_sample / _log / _on_run_finished for new events
+        if self.runtime is not None:
+            self.runtime.poll()       # calls _on_sample / _log / _on_run_finished for new events
         self._torque_plot.refresh()
         self._speed_plot.refresh()

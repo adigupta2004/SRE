@@ -29,7 +29,6 @@ from dataclasses import dataclass
 
 import config
 from control.run_log import RunLog
-from control.validation import error_stats, torque_error
 from hardware.encoder import ShaftSpeedEstimator
 from utils.mathutils import power_to_torque_nm
 from utils.timing import RatePacer
@@ -67,14 +66,16 @@ class Sample:
 
 @dataclass(frozen=True)
 class RunResult:
+    """
+    Summary of a finished run. It holds no per-sample data, so it stays small for runs
+    of any length: the samples themselves are in the CSV (log_path), which is where
+    plots and validation statistics are computed from.
+    """
     profile: str                  # profile description
     reason: str                   # why the run stopped
     log_path: str                 # None if the run was not logged to CSV
-    samples: list                 # every Sample of the run (ENTERING .. STOPPING)
-    error_times: list             # RUNNING-phase torque error (estimate - command in force)
-    errors: list
-    stats: object                 # validation.ErrorStats, or None if no RUNNING data
     duration_s: float
+    cycles: int                   # samples taken during the run (ENTERING .. STOPPING)
     mean_loop_dt: float
     overruns: int                 # cycles whose work took longer than the loop period
 
@@ -162,8 +163,12 @@ class DynoRuntime:
         self._stop_reason = None
         self._log = None
         self._log_ok = True           # False once a CSV write failed: the rest of the run is unlogged
-        self._samples = []
+        # Run statistics are kept as running totals, never as per-sample lists, so memory
+        # stays constant however long a run lasts.
+        self._cycles = 0
+        self._loop_dt_sum = 0.0       # over cycles after the first (see _cycle)
         self._overruns = 0
+        self._elapsed = 0.0           # elapsed_time of the latest sample
 
     # --------------------------------------------------------------------------
     # Public API: start(), then run()
@@ -263,8 +268,10 @@ class DynoRuntime:
         self._run_t0 = time.monotonic()
         self._profile_t0 = None
         self._stop_reason = None
-        self._samples = []
+        self._cycles = 0
+        self._loop_dt_sum = 0.0
         self._overruns = 0
+        self._elapsed = 0.0
         self._log = log
         self._log_ok = True
         self.phase = ENTERING
@@ -376,7 +383,12 @@ class DynoRuntime:
                 except OSError as e:
                     self._log_ok = False
                     self.on_message(f"[ERROR] CSV logging stopped for this run: {e}")
-            self._samples.append(sample)
+            # The first cycle's loop_dt also contains the start request's extra writes
+            # (0 N·m + RUN), so it is left out of the mean loop rate.
+            if self._cycles > 0:
+                self._loop_dt_sum += loop_dt
+            self._cycles += 1
+            self._elapsed = sample.elapsed_time
         self.on_sample(sample)
 
         # The stop ramp is done once the setpoint has reached 0 AND the drive has
@@ -468,28 +480,12 @@ class DynoRuntime:
         self.on_run_finished(self._build_result())
 
     def _build_result(self):
-        samples = self._samples
-        # Error statistics cover the RUNNING phase and the C2000 estimate only: the entry
-        # and stop ramps, and the electrical-power estimate (offset by motor losses), are
-        # plotted but not scored.
-        running = [s for s in samples if s.phase == RUNNING]
-        error_times, errors = torque_error(
-            [s.elapsed_time for s in running],
-            [s.torque_command_nm for s in running],
-            [s.torque_c2000_nm for s in running],
-        )
-        # The first sample's loop_dt also contains the start request's extra writes
-        # (0 N·m + RUN), so it is left out of the mean loop rate.
-        loop_dts = [s.loop_dt for s in samples[1:]]
         return RunResult(
             profile=self._profile.describe(),
             reason=self._stop_reason,
             log_path=None if self._log is None else self._log.path,
-            samples=samples,
-            error_times=error_times,
-            errors=errors,
-            stats=error_stats(errors),
-            duration_s=samples[-1].elapsed_time if samples else 0.0,
-            mean_loop_dt=sum(loop_dts) / len(loop_dts) if loop_dts else 0.0,
+            duration_s=self._elapsed,
+            cycles=self._cycles,
+            mean_loop_dt=self._loop_dt_sum / (self._cycles - 1) if self._cycles > 1 else 0.0,
             overruns=self._overruns,
         )

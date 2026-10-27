@@ -5,12 +5,17 @@ needed). The location is chosen by the user; it defaults to config.DEFAULT_LOG_L
 Two '#' lines identify the run (start time, profile); then one header row and one
 row per runtime cycle. Column names match the runtime Sample fields; torque in N·m
 (signed), rpm signed (+ = forward), power in kW (negative = regenerating), times in s.
+
+This module owns the file format: RunLog writes it, read_log() reads it back.
 """
 
 import csv
 import datetime
 import os
 import re
+from array import array
+
+import numpy as np
 
 import config
 
@@ -34,6 +39,7 @@ COLUMNS = [
     "output_power_kw",
     "dc_bus_v",
 ]
+TEXT_COLUMNS = {"phase"}     # every other column is numeric
 
 
 def _cell(value):
@@ -65,3 +71,43 @@ class RunLog:
 
     def close(self):
         self._file.close()
+
+
+def read_log(path, names):
+    """
+    Reads a run log written by RunLog. Returns (comments, columns):
+        comments  the '#' lines at the top, without the '#'
+        columns   {name: numpy array} for each of `names` present in the file
+                  (absent names are left out, e.g. in logs from older versions);
+                  numeric columns as float arrays, blank cells -> NaN; text columns
+                  (TEXT_COLUMNS) as object arrays of shared strings.
+    Only the requested columns are kept, at ~8 bytes per value, so even a run of
+    many hours stays small in memory. Raises OSError / ValueError for unreadable files
+    and for files that are not run logs.
+    """
+    comments = []
+    with open(path, newline="") as f:
+        for line in f:                               # '#' lines first, then the header row
+            if not line.startswith("#"):
+                header = next(csv.reader([line]))
+                break
+            comments.append(line[1:].strip())
+        else:
+            raise ValueError(f"{os.path.basename(path)} has no column header")
+        if COLUMNS[0] not in header:                 # every run log, old or new, has elapsed_time
+            raise ValueError(f"{os.path.basename(path)} is not a run log (no {COLUMNS[0]} column)")
+
+        wanted = [(name, header.index(name)) for name in names if name in header]
+        buffers = {name: [] if name in TEXT_COLUMNS else array("d") for name, _ in wanted}
+        shared = {}                                  # one str object per distinct text value
+        for row in csv.reader(f):
+            for name, i in wanted:
+                cell = row[i] if i < len(row) else ""
+                if name in TEXT_COLUMNS:
+                    buffers[name].append(shared.setdefault(cell, cell))
+                else:
+                    buffers[name].append(float(cell) if cell else np.nan)
+
+    columns = {name: np.array(buf, dtype=object) if name in TEXT_COLUMNS else np.frombuffer(buf)
+               for name, buf in buffers.items()}
+    return comments, columns

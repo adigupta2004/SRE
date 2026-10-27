@@ -46,22 +46,23 @@ def main():
         f"Slew {config.TORQUE_SLEW_NM_PER_S:g} N·m/s",
     )
 
-    # Start the control process before opening any window, so a connection or
-    # scaling problem is reported here without a GUI. It opens the port, sends
-    # 0 N·m + STOP, checks the torque scaling and starts the loop in IDLE.
+    # Start the control process first: it opens the port, sends 0 N·m + STOP, checks
+    # the torque scaling and starts the loop in IDLE. If that fails (drive off, wrong
+    # port, scaling mismatch), the window still opens, as a log viewer only.
     print("[VFD] Starting the control process ...")
-    runtime = RuntimeProcess()
+    runtime, startup_error = RuntimeProcess(), None
     try:
         runtime.start()
+        print(f"[VFD] 0 N·m and STOP sent. Torque scaling verified: Pr.05-02 = {config.MOTOR_RATED_POWER_KW:g} kW, "
+              f"Pr.05-03 = {config.MOTOR_RATED_RPM:g} rpm, Pr.11-27 = {config.PR_11_27_PCT:g} %.")
+        print("[VFD] Start the MUT forward, then use the window.")
     except Exception as e:
+        runtime, startup_error = None, str(e)
         print(f"[ERROR] Runtime not started: {e}")
-        return 1
-    print(f"[VFD] 0 N·m and STOP sent. Torque scaling verified: Pr.05-02 = {config.MOTOR_RATED_POWER_KW:g} kW, "
-          f"Pr.05-03 = {config.MOTOR_RATED_RPM:g} rpm, Pr.11-27 = {config.PR_11_27_PCT:g} %.")
-    print("[VFD] Start the MUT forward, then use the window.")
+        print("[VFD] Opening the window as a log viewer only.")
 
     app = QApplication(sys.argv)
-    window = DynoWindow(runtime)             # plugs its handlers into the runtime's callbacks
+    window = DynoWindow(runtime, startup_error)   # plugs its handlers into the runtime's callbacks
 
     # Ctrl+C in the terminal -> close the window -> controlled shutdown.
     # Python only runs signal handlers when it gets control back, and Qt's event loop
@@ -79,11 +80,12 @@ def main():
         # Window closed (normally only after any run has stopped). close() still goes
         # through the shutdown path if a run is somehow active, then the control
         # process closes the serial port and exits. Its last messages go to the terminal.
-        runtime.on_message = lambda text: print(f"[RUNTIME] {text}")
-        if runtime.close():
-            print("[VFD] Runtime stopped cleanly; serial port closed.")
-        else:
-            print("[ERROR] Runtime did not finish its shutdown - check the drive and use keypad STOP.")
+        if runtime is not None:
+            runtime.on_message = lambda text: print(f"[RUNTIME] {text}")
+            if runtime.close():
+                print("[VFD] Runtime stopped cleanly; serial port closed.")
+            else:
+                print("[ERROR] Runtime did not finish its shutdown - check the drive and use keypad STOP.")
         print("[VFD] Script 04 ended.")
     return 0
 

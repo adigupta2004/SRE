@@ -56,19 +56,30 @@ control/              dyno control logic: no Modbus details, no GUI code
   runtime.py          DynoRuntime: the loop itself, single-threaded: start(), then
                       run(next_command) in the caller's thread (commands: start / stop / exit);
                       phases IDLE / ENTERING / RUNNING / STOPPING; callbacks on_sample /
-                      on_message / on_run_finished; Sample, RunResult; shutdown_timeout_s()
+                      on_message / on_run_finished; Sample, RunResult (a small summary: no
+                      per-sample data is kept - runs may last hours); shutdown_timeout_s()
   runtime_process.py  RuntimeProcess: runs a DynoRuntime in its own "control process" (spawn)
                       and is the GUI's handle to it: same controls + poll(); command/event
                       queues; the loop runs in the child's main thread; child ignores Ctrl+C,
                       shuts the drive down if the GUI dies
-  run_log.py          RunLog: one CSV per run in <log location>/logs/ (2 '#' lines + COLUMNS)
-  validation.py       torque_error (estimate vs command in force = previous cycle), error_stats
+  run_log.py          RunLog: one CSV per run in <log location>/logs/ (2 '#' lines + COLUMNS);
+                      read_log(path, names): only the named columns as numpy arrays
+  validation.py       numpy: torque_error (estimate vs command in force = previous cycle),
+                      running_torque_error(columns) over RUNNING rows, error_stats
 gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
   trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh();
-                      max_points = live rolling window (thin pens), unset = full data (results)
+                      max_points = live rolling window, unset = whole arrays (downsampled,
+                      clip to view); 1-px antialiased pens (2-px AA is ~200x slower to paint)
+  log_view.py         LogView: the run-log viewer = everything about results (Results tab):
+                      summary, "Open CSV…", plots (PANELS) and stats, all read from the CSV;
+                      show_run(RunResult) / open_log(path); self-contained (file problems
+                      shown in its own summary; needs no control process or drive)
   profile_editor.py   ProfileEditor: profile picker, fields generated from PARAMS
   telemetry_panel.py  TelemetryPanel: label/value grid
-  dyno_window.py      DynoWindow: one GUI timer calls runtime.poll() then redraws live plots
+  dyno_window.py      DynoWindow: running the dyno only (controls, telemetry, live plots,
+                      messages); one GUI timer calls runtime.poll() then redraws live plots;
+                      hosts a LogView as its Results tab and hands it each finished run;
+                      runtime=None -> opens as a log viewer (drive not connected)
 utils/                generic helpers, no hardware knowledge
   mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
   timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
@@ -149,7 +160,9 @@ in `README.md`; keep its script table in step with the plan.
    gui/ widgets. Shutdown triggers: Stop, profile end, |RPM| > MAX_ABS_RPM, RPM <
    MIN_RUN_RPM, implausible encoder, MAX_CONSECUTIVE_COMM_ERRORS. Validation statistics
    are only bias, MAE and max |error| (user asked for nothing more), for the C2000 estimate
-   only. A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
+   only, computed in the GUI from the run's CSV (no CSV -> summary line only). Memory must
+   stay bounded for runs of hours: nothing per-sample is kept in either process (10 h log:
+   ~15 MB of columns, ~1.3 s to open). A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
    plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω). That
    caveat is stated in the code only (Sample and run_log COLUMNS comments); the GUI and the
    CSV stay minimal (user's choice: no caveats or notes in the window; CSV header = two
