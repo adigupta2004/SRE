@@ -1,9 +1,9 @@
 """
 TracePlot: a plot of any number of named traces sharing one x and one y axis,
-with a show/hide checkbox per trace (written in the trace's colour, so the
-checkboxes are also the legend) and autoscaling over the visible traces. Data can be appended point by point (live) or set in one go (results);
-the owner calls refresh() from a GUI timer so redraw cost is independent of the
-data rate.
+with a show/hide checkbox per trace (each with a short line sample in the trace's
+colour, so the checkboxes are also the legend) and autoscaling over the visible
+traces. Data can be appended point by point (live) or set in one go (results); the
+owner calls refresh() from a GUI timer so redraw cost is independent of the data rate.
 
 Live plots pass max_points: each trace then keeps only its newest max_points
 points (a rolling window). Every refresh redraws a whole trace, so without this the
@@ -23,13 +23,28 @@ from collections import deque
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QCheckBox, QGridLayout, QVBoxLayout, QWidget
 
 pg.setConfigOptions(background="w", foreground="k", antialias=True)
 
 DEFAULT_COLORS = ["#08519c", "#b2182b", "#1b7837", "#e66101", "#54278f", "#8c510a"]
 TOGGLES_PER_ROW = 5           # checkboxes wrap onto further rows
+LINE_SAMPLE_SIZE = QSize(22, 10)
+
+
+def _line_sample(color, dashed):
+    """A short, thick line in the trace's colour: the legend mark shown next to its checkbox."""
+    pixmap = QPixmap(LINE_SAMPLE_SIZE)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor(color), 3, Qt.DashLine if dashed else Qt.SolidLine, Qt.FlatCap))
+    y = LINE_SAMPLE_SIZE.height() / 2
+    painter.drawLine(1, y, LINE_SAMPLE_SIZE.width() - 1, y)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class TracePlot(QWidget):
@@ -65,8 +80,9 @@ class TracePlot(QWidget):
         self._curves[name].setVisible(visible)
         self._data[name] = self._new_buffers()
 
-        toggle = QCheckBox(name)
-        toggle.setStyleSheet(f"color: {color}")
+        toggle = QCheckBox(name)              # text in the normal colour, for readability
+        toggle.setIcon(_line_sample(color, dashed))
+        toggle.setIconSize(LINE_SAMPLE_SIZE)
         toggle.setChecked(visible)
         toggle.toggled.connect(lambda on, n=name: self.set_trace_visible(n, on))
         self._toggles.addWidget(toggle, index // TOGGLES_PER_ROW, index % TOGGLES_PER_ROW)
