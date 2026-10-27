@@ -2,12 +2,13 @@
 LogView: the run-log viewer - everything about results, shown as DynoWindow's
 Results tab.
 
-It shows a run log (a CSV written by control.run_log): a summary header, the torque
-comparison and torque-error plots, and the validation statistics, plus an "Open CSV…"
-button for any older log. All of it is read back from the file rather than kept in
-memory during the run, so runs of any length can be viewed: control.run_log.read_log
-reads only the columns needed, as compact numpy arrays (a 10-hour log: ~15 MB, ~1.3 s
-to open), and TracePlot downsamples long traces for drawing.
+It shows a run log (a CSV written by control.run_log): a summary header, one plot
+with a checkbox per quantity (gui/quantities.py, plus the torque error), and the
+validation statistics, plus an "Open CSV…" button for any older log. All of it is
+read back from the file rather than kept in memory during the run, so runs of any
+length can be viewed: control.run_log.read_log reads the plotted columns as compact
+numpy arrays (a 10-hour log: ~30 MB, ~2 s to open), and TracePlot downsamples long
+traces for drawing. Every column is read up front, so ticking a box needs no re-read.
 
     show_run(result)  a run has just finished: its summary, then plots and statistics
                       from its CSV (summary only if it was not saved)
@@ -19,43 +20,20 @@ are shown in its own summary.
 """
 
 import os
-from dataclasses import dataclass
 
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 import config
 from control.run_log import read_log
 from control.validation import ERROR_COLUMNS, error_stats, running_torque_error
+from gui.quantities import QUANTITIES
 from gui.trace_plot import TracePlot
 
 TIME_COLUMN = "elapsed_time"
 
-# Torque from the drive's electrical output power / shaft speed (see Sample.torque_elec_power_nm).
-# Shared with DynoWindow's live plot, so both show the same name.
-TORQUE_ELEC_POWER_TRACE = "Elec. P/ω estimate"
-
-
-@dataclass(frozen=True)
-class _Trace:
-    label: str
-    column: str = None            # a CSV column, plotted against elapsed time, or ...
-    compute: object = None        # ... compute(columns) -> (x, y) from the loaded columns
-    uses: tuple = ()              # the columns compute() needs
-    color: str = None
-
-
-# The plots, top to bottom: (title, y-axis label, traces). To show another quantity,
-# add a panel or a trace here; load() reads whatever columns these need.
-PANELS = [
-    ("Torque comparison", "torque (N·m)", [
-        _Trace("Command", column="torque_command_nm"),
-        _Trace("C2000 estimate", column="torque_c2000_nm"),
-        _Trace(TORQUE_ELEC_POWER_TRACE, column="torque_elec_power_nm"),
-    ]),
-    ("Torque error (C2000 estimate - command)", "error (N·m)", [
-        _Trace("Error", compute=running_torque_error, uses=ERROR_COLUMNS, color="#d62728"),
-    ]),
-]
+# Only in the viewer: computed from the log (RUNNING rows), not a column of it.
+ERROR_LABEL = "Torque error: C2000 estimate − command (N·m)"
+ERROR_COLOR = "#e66101"
 
 
 class LogView(QWidget):
@@ -72,18 +50,16 @@ class LogView(QWidget):
         header.addWidget(self._summary, stretch=1)
         header.addWidget(open_button)
 
+        self._plot = TracePlot("Run", "time (s)", "")
+        for q in QUANTITIES:
+            self._plot.add_trace(q.label, color=q.color, visible=q.shown)
+        self._plot.add_trace(ERROR_LABEL, color=ERROR_COLOR, visible=True)
+        # Every column any trace needs, read once per log.
+        self._columns = sorted({TIME_COLUMN, *(q.column for q in QUANTITIES), *ERROR_COLUMNS})
+
         layout = QVBoxLayout(self)
         layout.addLayout(header)
-        self._plots = []                          # (TracePlot, its traces)
-        needed = {TIME_COLUMN}                    # every column any trace needs
-        for title, y_label, traces in PANELS:
-            plot = TracePlot(title, "time (s)", y_label)
-            for t in traces:
-                plot.add_trace(t.label, color=t.color)
-                needed.update([t.column] if t.column else t.uses)
-            layout.addWidget(plot)
-            self._plots.append((plot, traces))
-        self._columns = sorted(needed)
+        layout.addWidget(self._plot)
 
     # --------------------------------------------------------------------------
     # Public API
@@ -94,10 +70,10 @@ class LogView(QWidget):
             try:
                 _, details = self._load(result.log_path)
             except (OSError, ValueError) as e:
-                self._clear_plots()
+                self._plot.clear()
                 details = [f"Could not read the CSV: {e}"]
         else:
-            self._clear_plots()
+            self._plot.clear()
             details = ["Not saved: no plots or statistics."]
         loop_hz = 1.0 / result.mean_loop_dt if result.mean_loop_dt else 0.0
         self._summary.setText(
@@ -112,7 +88,7 @@ class LogView(QWidget):
         try:
             comments, details = self._load(path)
         except (OSError, ValueError) as e:
-            self._clear_plots()                   # summary and plots always describe the same file
+            self._plot.clear()                    # summary and plot always describe the same file
             self._summary.setText(f"<b>Could not read {os.path.basename(path)}</b><br>{e}")
             return
         # The first two '#' lines are the start time and the profile (older logs have more).
@@ -137,20 +113,21 @@ class LogView(QWidget):
         comments, columns = read_log(path, self._columns)
         self._folder = os.path.dirname(path)
 
-        missing = []
-        for plot, traces in self._plots:
-            plot.clear()
-            for t in traces:
-                if t.column and t.column in columns and TIME_COLUMN in columns:
-                    plot.set_data(t.label, columns[TIME_COLUMN], columns[t.column])
-                elif t.compute and all(c in columns for c in t.uses):
-                    plot.set_data(t.label, *t.compute(columns))
-                else:
-                    missing.append(t.label)       # e.g. a log from before that column existed
-            plot.refresh()
+        self._plot.clear()
+        missing = []                              # e.g. a log from before a column existed
+        for q in QUANTITIES:
+            if q.column in columns:
+                self._plot.set_data(q.label, columns[TIME_COLUMN], columns[q.column])
+            else:
+                missing.append(q.label)
+        has_error_columns = all(c in columns for c in ERROR_COLUMNS)
+        if has_error_columns:
+            self._plot.set_data(ERROR_LABEL, *running_torque_error(columns))
+        else:
+            missing.append(ERROR_LABEL)
+        self._plot.refresh()
         details = [f"Not in this log: {', '.join(missing)}"] if missing else []
-        stats = (error_stats(running_torque_error(columns)[1])
-                 if all(c in columns for c in ERROR_COLUMNS) else None)
+        stats = error_stats(running_torque_error(columns)[1]) if has_error_columns else None
         if stats is None:
             details.append("Statistics not available (no RUNNING-phase data).")
         else:
@@ -158,7 +135,3 @@ class LogView(QWidget):
                            f"<b>Mean absolute error:</b> {stats.mae:.2f} N·m &nbsp; "
                            f"<b>Max absolute error:</b> {stats.max_abs:.2f} N·m &nbsp; ({stats.n} samples)")
         return comments, details
-
-    def _clear_plots(self):
-        for plot, _ in self._plots:
-            plot.clear()

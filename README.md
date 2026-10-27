@@ -81,6 +81,7 @@ control/           dyno control logic, no Modbus and no GUI code
 gui/               reusable PySide6 + pyqtgraph widgets; never talks to the hardware
   trace_plot.py    named traces, legend, show/hide, autoscale, clear
   log_view.py      viewer for saved run logs (used by the Results tab)
+  quantities.py    the quantities both plots can show (label, unit, colour)
   profile_editor.py    profile picker with fields generated from each profile
   telemetry_panel.py   live label/value grid
   dyno_window.py   main window for running profiles; also a log viewer

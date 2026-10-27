@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLin
 import config
 from control.runtime import IDLE
 from control.torque_profiles import PROFILES
-from gui.log_view import TORQUE_ELEC_POWER_TRACE, LogView
+from gui.log_view import LogView
+from gui.quantities import QUANTITIES
 from gui.profile_editor import ProfileEditor
 from gui.telemetry_panel import TelemetryPanel
 from gui.trace_plot import TracePlot
@@ -120,22 +121,17 @@ class DynoWindow(QMainWindow):
         left_layout.addWidget(self._messages, stretch=1)
 
         # ---- Right: live and result plots ----
-        self._torque_plot = TracePlot("Torque", "time (s)", "torque (N·m)", max_points=LIVE_POINTS)
-        self._torque_plot.add_trace("Command")
-        self._torque_plot.add_trace("C2000 estimate")
-        self._torque_plot.add_trace(TORQUE_ELEC_POWER_TRACE)
-        self._speed_plot = TracePlot("Speed", "time (s)", "speed (rpm)", max_points=LIVE_POINTS)
-        self._speed_plot.add_trace("Encoder RPM")
-        self._speed_plot.add_trace("C2000 RPM", dashed=True)
-        live = QWidget()
-        live_layout = QVBoxLayout(live)
-        live_layout.addWidget(self._torque_plot)
-        live_layout.addWidget(self._speed_plot)
+        # One live plot with a checkbox per quantity (the same list as the Results tab).
+        # Every quantity is recorded whether or not it is shown, so ticking one shows
+        # its last LIVE_WINDOW_S at once.
+        self._live_plot = TracePlot(f"Live (last {LIVE_WINDOW_S} s)", "time (s)", "", max_points=LIVE_POINTS)
+        for q in QUANTITIES:
+            self._live_plot.add_trace(q.label, color=q.color, visible=q.shown)
 
         self._results = LogView()
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(live, "Live")
+        self._tabs.addTab(self._live_plot, "Live")
         self._tabs.addTab(self._results, "Results")
 
         splitter = QSplitter()
@@ -166,8 +162,7 @@ class DynoWindow(QMainWindow):
         except ValueError as e:
             self._log(f"[ERROR] {e}")
             return
-        self._torque_plot.clear()
-        self._speed_plot.clear()
+        self._live_plot.clear()
         self._tabs.setCurrentIndex(0)
         log_location = self._log_location.text() if self._save_log.isChecked() else None
         self.runtime.start_run(profile, log_location)
@@ -201,11 +196,8 @@ class DynoWindow(QMainWindow):
         self._update_buttons()
 
         if s.phase != IDLE:
-            self._torque_plot.append("Command", s.elapsed_time, s.torque_command_nm)
-            self._torque_plot.append("C2000 estimate", s.elapsed_time, s.torque_c2000_nm)
-            self._torque_plot.append(TORQUE_ELEC_POWER_TRACE, s.elapsed_time, s.torque_elec_power_nm)
-            self._speed_plot.append("Encoder RPM", s.elapsed_time, s.encoder_rpm)
-            self._speed_plot.append("C2000 RPM", s.elapsed_time, s.c2000_rpm)
+            for q in QUANTITIES:
+                self._live_plot.append(q.label, s.elapsed_time, getattr(s, q.column))
 
         self._telemetry.set_values({
             "phase": s.phase,
@@ -256,5 +248,4 @@ class DynoWindow(QMainWindow):
     def _on_timer(self):
         if self.runtime is not None:
             self.runtime.poll()       # calls _on_sample / _log / _on_run_finished for new events
-        self._torque_plot.refresh()
-        self._speed_plot.refresh()
+        self._live_plot.refresh()

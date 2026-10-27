@@ -67,17 +67,21 @@ control/              dyno control logic: no Modbus details, no GUI code
   validation.py       numpy: torque_error (estimate vs command in force = previous cycle),
                       running_torque_error(columns) over RUNNING rows, error_stats
 gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
-  trace_plot.py       TracePlot: named traces, legend, show/hide, autoscale, clear, refresh();
+  trace_plot.py       TracePlot: named traces, checkboxes in trace colours (= legend, wrapping
+                      grid), show/hide, autoscale to visible, clear, refresh();
                       max_points = live rolling window, unset = whole arrays (downsampled,
                       clip to view); 1-px antialiased pens (2-px AA is ~200x slower to paint)
+  quantities.py       QUANTITIES: plotted quantities (label with unit, Sample field = CSV
+                      column, colour, shown by default) shared by the live and results plots
   log_view.py         LogView: the run-log viewer = everything about results (Results tab):
-                      summary, "Open CSV…", plots (PANELS) and stats, all read from the CSV;
+                      summary, "Open CSV…", one plot (QUANTITIES + torque error) and stats,
+                      all columns read up front from the CSV (10 h: ~32 MB, ~1.7 s);
                       show_run(RunResult) / open_log(path); self-contained (file problems
                       shown in its own summary; needs no control process or drive)
   profile_editor.py   ProfileEditor: profile picker, fields generated from PARAMS
   telemetry_panel.py  TelemetryPanel: label/value grid
-  dyno_window.py      DynoWindow: running the dyno only (controls, telemetry, live plots,
-                      messages); one GUI timer calls runtime.poll() then redraws live plots;
+  dyno_window.py      DynoWindow: running the dyno only (controls, telemetry, one live plot
+                      of QUANTITIES, messages); one GUI timer calls runtime.poll() then redraws;
                       hosts a LogView as its Results tab and hands it each finished run;
                       runtime=None -> opens as a log viewer (drive not connected)
 utils/                generic helpers, no hardware knowledge
