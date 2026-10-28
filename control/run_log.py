@@ -31,12 +31,16 @@ COLUMNS = [
     "encoder_rpm",
     "filtered_rpm",
     "c2000_rpm",
-    "torque_c2000_nm",       # 2208H converted with the motor rated torque (drive's own estimate)
-    "torque_elec_power_nm",  # output power / filtered rpm (2206H, 0.1 kW steps): includes the dyno
-                             # motor's losses, so offset by about +losses/ω vs the shaft torque;
-                             # blank below MIN_RUN_RPM; not used in the error statistics
-    "current_a",
-    "output_power_kw",
+    "torque_c2000_nm",       # 2208H converted with the motor rated torque: drive's motor-model value,
+                             # not a usable torque reading yet (see C2000.Telemetry.torque_nm)
+    "estimated_torque_nm",   # (power_vi - no-load losses) / ω: estimated shaft torque, scored by the
+                             # error statistics; blank below MIN_RUN_RPM
+    "torque_elec_nm",        # power_vi / ω: electrical torque, after the dyno motor's losses;
+                             # blank below MIN_RUN_RPM; not scored
+    "output_current_a",      # output current (AC)
+    "output_voltage_v",      # output voltage (AC line-line)
+    "power_angle_deg",       # signed angle between output voltage and current (+ motoring, - regen)
+    "power_vi_kw",           # output power sqrt(3)·V·I·cos(angle) (negative = regenerating)
     "dc_bus_v",
 ]
 TEXT_COLUMNS = {"phase"}     # every other column is numeric

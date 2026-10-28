@@ -21,12 +21,15 @@ class Quantity:
 
 QUANTITIES = [
     Quantity("Torque command (N·m)", "torque_command_nm", "#08519c", shown=True),
+    Quantity("Estimated torque (N·m)", "estimated_torque_nm", "#1b7837", shown=True),
     Quantity("C2000 torque estimate (N·m)", "torque_c2000_nm", "#b2182b", shown=True),
-    Quantity("Elec. P/ω torque estimate (N·m)", "torque_elec_power_nm", "#1b7837", shown=True),
+    Quantity("Electrical torque P/ω (N·m)", "torque_elec_nm", "#5aae61"),
     Quantity("Encoder speed (rpm)", "encoder_rpm", "#54278f"),
     Quantity("Filtered speed (rpm)", "filtered_rpm", "#8073ac"),
     Quantity("C2000 speed (rpm)", "c2000_rpm", "#525252"),
-    Quantity("Current (A)", "current_a", "#01665e"),
-    Quantity("Output power (kW)", "output_power_kw", "#c51b7d"),
+    Quantity("Output current (A)", "output_current_a", "#01665e"),
+    Quantity("Output voltage (V)", "output_voltage_v", "#8c510a"),
+    Quantity("Power angle (°)", "power_angle_deg", "#808000"),
+    Quantity("Output power (kW)", "power_vi_kw", "#c51b7d"),
     Quantity("DC bus (V)", "dc_bus_v", "#000000"),
 ]

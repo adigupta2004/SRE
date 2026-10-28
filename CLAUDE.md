@@ -39,7 +39,8 @@ PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
 Each module's docstring explains it in detail; this is the map.
 
 ```
-config.py              user-editable settings: link, encoder, loop rate, torque scaling, limits, logs
+config.py              user-editable settings: link, encoder, loop rate, torque scaling, limits, logs,
+                       no-load loss table
 hardware/              device-specific code
   comms.py             open_instrument(): the only place pyserial/minimalmodbus is configured
   registers.py         C2000 register map + command words (fixed hardware facts)
@@ -50,7 +51,7 @@ control/               dyno logic: no Modbus details, no GUI code
   runtime.py           DynoRuntime: the ~10 Hz loop, single-threaded run(next_command)
   runtime_process.py   RuntimeProcess: runs DynoRuntime in its own process; the GUI's handle
   run_log.py           CSV run logs: RunLog writes, read_log() reads columns back as numpy
-  validation.py        torque error (estimate vs command in force) and its statistics
+  validation.py        torque error (estimated torque vs command in force) and its statistics
 gui/                   PySide6 + pyqtgraph; never talks to the drive
   trace_plot.py        TracePlot: named traces, checkbox legend, live window or whole arrays
   quantities.py        QUANTITIES: what the live and results plots can show (shared list)
@@ -86,11 +87,16 @@ logs/, Manuals/        run logs and PDFs, not tracked in git
 
 ## Product decisions (from the user)
 
-- Validation statistics: bias, MAE and max |error| only, for the C2000 estimate only.
+- Validation statistics: bias, MAE and max |error| only, scoring `estimated_torque_nm`
+  only (Oct 2026; previously the C2000 estimate).
 - The GUI stays clean: no caveats, footnotes or explanatory notes in the window. The CSV
   header is two `#` lines (start time, profile). Caveats live in code comments.
-- `torque_elec_power_nm` (2206H power / filtered ω) is logged and plotted, not scored; it
-  includes the dyno motor's losses (≈ +losses/ω offset).
+- Power is `power_vi_kw` = √3·V·I·cos(angle) from 2204H/2200H/2205H; 2206H is not read
+  (finer, no truncation; reasons in `C2000.Telemetry.power_vi_kw`).
+- Torque quantities: `estimated_torque_nm` = (power_vi − no-load losses(rpm)) / ω, the scored
+  estimate (loss table `config.NO_LOAD_LOSS_*`, measured with 0 N·m runs); `torque_elec_nm` =
+  power_vi / ω (after the motor's losses), logged and plotted, not scored; `torque_c2000_nm`
+  (2208H) kept but documented as not usable yet.
 - Logs go to `<log location>/logs/`, location chosen in the GUI (default: project root,
   not remembered). The window opens as a log viewer when the drive isn't connected.
 
@@ -128,21 +134,37 @@ Keep `requirements.txt` updated whenever a package is installed.
    deliberately atomic (no logging/plots/fault handling), works in %.
 7. Script 4 (`test_04_torque_runtime.py`) — runs on the rig: profiles, live plots, CSV,
    results viewer, validation. Loop holds 10 Hz (cycle_time ~45–49 ms, flat over 60 s+
-   runs, Oct 2026). Open: the torque-estimate finding below.
+   runs, Oct 2026). Scores `estimated_torque_nm`; open: the torque findings below and a
+   fuller loss table.
 8. Next: drive-cycle / road-load simulation (Mode C) as a profile in the same runtime;
    polynomial (Mode B) and T = k/ω profiles not written yet.
 9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
 
 ## Open issues
 
-- **C2000 torque estimate reads 0.83 × command** (2208H; constant at 5/10/20 N·m, 485 and
-  1000 rpm, TQCPG). Our scaling is confirmed (2227H agrees) and the command arrives
-  unchanged (2228H). At 1000 rpm, P/ω is a physical lower bound on |shaft torque| that the
-  estimate falls below, so the shaft torque is close to the command and the *estimate* is
-  ~17 % low. Suspected: motor-1 parameters (Pr.05-01, 05-05..05-09; auto-tune Pr.05-00).
-  **Do not rescale in software.** Until fixed, validation stats mostly measure this.
-  Independent checks: MUT/dyno power bracket at high power, torque arm at standstill,
-  inline torque transducer.
+- **C2000 torque estimate (2208H) is not usable** (rig tests 25–28 Oct 2026, TQCPG). It
+  reads 0.83 × command at 5–30 N·m and 490–2500 rpm; our scaling is confirmed (2227H
+  agrees, 2228H echoes the command unchanged; 210BH is the same value too). It is a
+  motor-model value: it follows the command almost instantly, even while the flux builds
+  up after RUN, and stays flat through the real transients below. The delivered torque is
+  close to the command: `estimated_torque_nm` = 30.3 N·m at −30 N·m / 2470 rpm (power
+  ~7.3 kW, measurement error ~1 %), 16.0 N·m settled at −15 N·m / 2490 rpm (within the
+  ~3 % measurement uncertainty at 3.6 kW). So the estimate is ~17–22 % below the real
+  torque. **Do not rescale in software.** Suspected: motor-1 parameters (Pr.05-01,
+  05-05..05-09; auto-tune Pr.05-00) — the user does not want them changed for now;
+  changing them may also change the delivered torque. Independent checks still open:
+  torque arm at standstill, inline torque transducer.
+- **Delivered-torque transients** (seen in power_vi, not in 2208H): after RUN the drive
+  builds the motor's flux in ~4 s (2204H voltage ~4 V → full), so torque commanded during
+  ENTERING arrives late. At −15 N·m / 2500 rpm the torque then settles over ~40 s
+  (τ ≈ 10 s; +12 % at first after RUN, −3 % after a step down from −30 N·m, settled in
+  ~15–25 s); at −30 N·m there is no such drift. Current stays constant meanwhile, only its
+  split between flux and torque changes: a slow internal state of the drive's control,
+  not motor temperature. Handling (wait before scoring, etc.) is still to be decided.
+- `estimated_torque_nm` relies on the drive's own voltage value (2204H is probably the
+  commanded voltage) and on the no-load loss table (3 speeds so far; excludes the extra
+  copper loss under load). At ~1–2 kW the power figures may be off by ~50–100 W
+  (0.5–1 N·m at 1000 rpm), so low-power results are less certain.
 - Comm-loss timeout Pr.09-03 is 0.0 s (disabled) for testing; intended 1.0 s. The loop
   keeps talking at 10 Hz in its own process, so enabling it is a rig decision.
 - A software/hardware overspeed trip is still TODO (Pr.11-37/11-38 only regulate speed).
@@ -164,8 +186,16 @@ Keep `requirements.txt` updated whenever a package is installed.
 - 2000H: STOP 0x0001, RUN 0x0002 (torque mode: no direction bits), RUN FWD 0x0012,
   RUN REV 0x0022. 2001H freq command (0.01 Hz, magnitude only). 2002H bit1 = fault reset.
 - 2101H bits 1-0: Stopped/Decelerating/Standby/Operating. 2102H/2103H freq command/output.
-- 2200H output current: decimal places in the **high byte of 211FH** (read once).
-- 2206H output power: **signed**, 0.1 kW, negative when regenerating.
+- 2200H output current (AC, drive → motor): decimal places in the **high byte of 211FH**
+  (read once).
+- 2204H output voltage, 0.1 V (AC line-line; probably the drive's commanded voltage).
+- 2205H power angle: **signed**, 0.1°. |angle| = phase angle between output voltage and
+  output current (0–90°); sign + motoring, − regenerating (e.g. +83° at 0 N·m, −40° at
+  −30 N·m). Power = sign·√3·V·I·cos(angle), agrees with 2206H.
+- 2206H output power: **signed**, 0.1 kW, negative when regenerating; appears to truncate
+  (20–80 W nearer zero than 2204H/2205H power). Not read by the code.
+- 210BH = 2208H (signed 0.1 %); 210FH = 2206H in 0.1 kW (manual says X.XXX kW — wrong for
+  this drive, possibly model-size dependent). Neither is read by the code.
 - 2207H motor speed: **unsigned**, drops to 0 on STOP — comparison only.
 - 2208H output torque: signed, 0.1 % of **motor rated torque** (not of Pr.11-27 like the
   command). Compare command and estimate only after converting both to N·m.

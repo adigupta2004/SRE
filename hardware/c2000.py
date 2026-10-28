@@ -9,6 +9,7 @@ log and continue, retry or stop.
 Control mode (Pr.00-10 speed/torque) is set on the keypad, not by software.
 """
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -33,8 +34,8 @@ MONITOR_BLOCK_COUNT = reg.REG_PG_FEEDBACK - reg.REG_MOTOR_SPEED + 1    # 3 words
 STATUS_BLOCK_START = reg.REG_DRIVE_STATUS
 STATUS_BLOCK_COUNT = reg.REG_OUTPUT_FREQ - reg.REG_DRIVE_STATUS + 1    # 3 words
 
-# 2200H..2209H: current, DC bus, output power, C2000 RPM, output torque, PG feedback
-# (2201H, 2202H, 2204H and 2205H come along unused).
+# 2200H..2209H: output current, DC bus, output voltage, power angle, C2000 RPM, output
+# torque, PG feedback (2201H, 2202H and 2206H come along unused).
 DRIVE_BLOCK_START = reg.REG_OUTPUT_CURR
 DRIVE_BLOCK_COUNT = reg.REG_PG_FEEDBACK - reg.REG_OUTPUT_CURR + 1      # 10 words
 
@@ -45,9 +46,11 @@ class Telemetry:
     output_freq_hz: float
     motor_rpm: int          # 2207H, unsigned magnitude (sensorless estimate)
     dc_bus_v: float
-    output_power_kw: float  # 2206H, signed (negative = regenerating)
-    torque_pct: float       # 2208H, signed, % of motor rated torque
-    current_a: float
+    torque_pct: float       # 2208H, signed, % of motor rated torque (not usable yet: see torque_nm)
+    output_current_a: float # 2200H output current (AC, drive -> motor), not the DC-bus current
+    output_voltage_v: float # 2204H output voltage (AC line-line)
+    power_angle_deg: float  # 2205H, signed: |angle| between output voltage and current,
+                            # sign + motoring / - regenerating (see registers.REG_POWER_ANGLE)
     status_word: int        # raw 2101H
 
     @property
@@ -55,8 +58,41 @@ class Telemetry:
         return reg.DRIVE_STATE_NAMES.get(self.status_word & reg.STATUS_STATE_MASK, "Unknown")
 
     @property
+    def power_vi_kw(self):
+        """
+        Drive output power from output voltage, output current and power angle:
+        P = sqrt(3) * V_line * I * cos(angle), signed by the angle (+ motoring, - regenerating).
+
+        Used instead of the drive's own output-power register (2206H). On the rig
+        (2026-10-28) the two agree, also through ramps, so they describe the same power;
+        this one is preferred only because it is finer:
+          - 2206H moves in 0.1 kW steps, 0.4-1 N·m of P/ω at 1000-2500 rpm, so single
+            readings jump between two steps and P/ω can show values that are physically
+            impossible (e.g. more opposing torque than commanded plus losses).
+          - 2206H also reads 20-80 W nearer zero than this value in every run, motoring and
+            regenerating: it appears to truncate rather than round.
+          - This value's sample-to-sample noise is 4-65 W.
+        It is not an independent measurement: 2204H is most likely the drive's commanded
+        voltage, from which the drive probably computes 2206H too.
+        """
+        cos_phi = math.cos(math.radians(self.power_angle_deg))
+        sign = -1.0 if self.power_angle_deg < 0 else 1.0
+        return sign * math.sqrt(3.0) * self.output_voltage_v * self.output_current_a * cos_phi / 1000.0
+
+    @property
     def torque_nm(self):
-        """2208H in N·m (its 100 % is the motor rated torque, not Pr.11-27)."""
+        """
+        2208H in N·m (its 100 % is the motor rated torque, not Pr.11-27).
+
+        CURRENTLY NOT A USABLE TORQUE READING; how to make it accurate is still open (see
+        CLAUDE.md, open issues). It is a value from the drive's motor model, not a
+        measurement of the torque the motor produces:
+          - it reads ~0.83 x the command at every torque and speed tested, ~17-22 % below
+            the torque derived from the electrical power;
+          - it follows the command almost instantly, even during the flux build-up after
+            RUN, when the motor cannot yet produce that torque, and stays flat through the
+            slow torque transients the electrical power shows. It does not capture reality.
+        """
         return self.torque_pct / 100.0 * config.MOTOR_RATED_TORQUE_NM
 
 
@@ -236,8 +272,9 @@ class C2000:
             output_freq_hz=status[reg.REG_OUTPUT_FREQ] / 100.0,
             motor_rpm=drive[reg.REG_MOTOR_SPEED],
             dc_bus_v=drive[reg.REG_DC_BUS_VOLT] / 10.0,
-            output_power_kw=to_signed16(drive[reg.REG_OUTPUT_POWER]) / 10.0,
             torque_pct=to_signed16(drive[reg.REG_OUTPUT_TORQUE]) / 10.0,
-            current_a=drive[reg.REG_OUTPUT_CURR] / self._get_current_divisor(),
+            output_current_a=drive[reg.REG_OUTPUT_CURR] / self._get_current_divisor(),
+            output_voltage_v=drive[reg.REG_OUTPUT_VOLT] / 10.0,
+            power_angle_deg=to_signed16(drive[reg.REG_POWER_ANGLE]) / 10.0,
             status_word=status[reg.REG_DRIVE_STATUS],
         )

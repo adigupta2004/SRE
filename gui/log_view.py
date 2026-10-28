@@ -32,7 +32,7 @@ from gui.trace_plot import TracePlot
 TIME_COLUMN = "elapsed_time"
 
 # Only in the viewer: computed from the log (RUNNING rows), not a column of it.
-ERROR_LABEL = "Torque error: C2000 estimate − command (N·m)"
+ERROR_LABEL = "Torque error: estimated − command (N·m)"
 ERROR_COLOR = "#e66101"
 
 
@@ -128,7 +128,9 @@ class LogView(QWidget):
         self._plot.refresh()
         details = [f"Not in this log: {', '.join(missing)}"] if missing else []
         stats = error_stats(running_torque_error(columns)[1]) if has_error_columns else None
-        if stats is None:
+        if not has_error_columns:
+            details.append("Statistics not available (no estimated torque in this log).")
+        elif stats is None:
             details.append("Statistics not available (no RUNNING-phase data).")
         else:
             details.append(f"<b>Bias (mean error):</b> {stats.bias:+.2f} N·m &nbsp; "

@@ -63,11 +63,19 @@ REG_FREQ_COMMAND_MONITOR = 0x2102  # 8450  frequency command, 0.01 Hz
 REG_OUTPUT_FREQ = 0x2103       # 8451  actual output frequency, 0.01 Hz
 REG_CURRENT_DECIMAL = 0x211F   # 8479  high byte = decimal places of output current
 
-REG_OUTPUT_CURR = 0x2200       # 8704  output current, scaled by 211FH high byte
+# Output current, output voltage and power angle: together they give the drive's output
+# power, sqrt(3) * V * I * cos(angle) (see C2000.Telemetry.power_vi_kw).
+REG_OUTPUT_CURR = 0x2200       # 8704  output current (VFD -> motor, AC), scaled by 211FH high byte
 REG_DC_BUS_VOLT = 0x2203       # 8707  0.1 V
-# Output power is signed (two's complement), negative when regenerating (observed on 
-# hardware in Script 3).
-REG_OUTPUT_POWER = 0x2206      # 8710  output power, signed, 0.1 kW
+REG_OUTPUT_VOLT = 0x2204       # 8708  output voltage (VFD -> motor, AC line-line), 0.1 V
+# Power angle (verified on the rig, 2026-10-28): signed, 0.1 deg. Its magnitude is the phase
+# angle between the output voltage and the output current (0..90 deg; cos of it is the power
+# factor); its sign gives the direction of power flow: + motoring (power from the drive into
+# the motor), - regenerating (power from the motor into the drive). E.g. +83 deg at 0 N·m
+# (drive only supplying the motor's losses), -40 deg at -30 N·m regenerating.
+REG_POWER_ANGLE = 0x2205       # 8709  power angle, signed, 0.1 deg
+# 2206H (output power, signed 0.1 kW) is deliberately not read: power_vi_kw replaces it
+# (reasons in C2000.Telemetry.power_vi_kw).
 # Note - estimated speed is not very accurate; becomes 0 as soon as stop command
 # is given. So not really estimated speed maybe; somehow related to target? But it
 # is not the same as the target for sure. Some estimation is happening. Also, this
@@ -77,7 +85,8 @@ REG_MOTOR_SPEED = 0x2207       # 8711 motor speed from VFD's calculation, rpm (u
                                # When sensorless it is estimated from speeds, when TQCPG 
                                # it is probably from encoder itself.
 REG_OUTPUT_TORQUE = 0x2208     # 8712  estimated output torque, signed, 0.1 % of MOTOR RATED
-                               # torque (not of Pr.11-27 like the command; manual Pr.00-04 = 8)
+                               # torque (not of Pr.11-27 like the command; manual Pr.00-04 = 8).
+                               # Currently not a usable torque reading: see C2000.Telemetry.torque_nm.
 REG_PG_FEEDBACK = 0x2209       # 8713  PG feedback, 0..4095 per mechanical rev
 REG_POS_LOW = 0x222C           # 8748  motor actual position, low word
 REG_POS_HIGH = 0x222D          # 8749  motor actual position, high word

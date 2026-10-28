@@ -32,8 +32,8 @@ def print_telemetry(tel):
     print(f" Target Freq: {tel.freq_cmd_hz:6.2f} Hz | Actual Output Freq: {tel.output_freq_hz:6.2f} Hz "
           f"| Estimated Motor Speed: {tel.motor_rpm:5d} rpm")
     print(f" Torque: {tel.torque_pct:6.1f} % of motor rated (2208H estimate) | Status: {tel.state:<13}")
-    print(f" DC Bus: {tel.dc_bus_v:6.1f} V       | Current: {tel.current_a:7.2f} A            "
-          f"| Power: {tel.output_power_kw:6.1f} kW")
+    print(f" DC Bus: {tel.dc_bus_v:6.1f} V       | Output current: {tel.output_current_a:7.2f} A     "
+          f"| Output power: {tel.power_vi_kw:6.2f} kW")
     rule()
 
 

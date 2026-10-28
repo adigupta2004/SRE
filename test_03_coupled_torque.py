@@ -136,7 +136,7 @@ class CoupledTorqueTest:
 
         show_status(
             f"ENC={enc}rpm | Tcmd={self.torque_cmd:+5.1f}% | Test={test_pct:+5.1f}% "
-            f"| {self.load_type():<8} | I={tel.current_a:6.2f}A | P={tel.output_power_kw:5.1f}kW "
+            f"| {self.load_type():<8} | I={tel.output_current_a:6.2f}A | P={tel.power_vi_kw:5.2f}kW "
             f"| DC={tel.dc_bus_v:5.1f}V | {tel.state} | C2000={s.c2000_rpm:4d}rpm | dt={r.dt * 1000:3.0f}ms"
         )
 

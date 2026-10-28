@@ -1,9 +1,12 @@
 """
-Commanded vs C2000-estimated torque comparison, computed from a run log.
+Commanded vs estimated torque comparison, computed from a run log.
 
-The C2000 estimate (2208H) is the drive's own model output, not an independent
-measurement: these numbers describe agreement between the command and the
-drive's estimate, not absolute torque accuracy.
+The scored estimate is estimated_torque_nm: the shaft torque derived from the drive's
+output power minus the dyno motor's no-load losses (control/runtime.py). It is not an
+independent torque measurement (it relies on the drive's own voltage and current values
+and on the loss table in config.py), but it reflects real torque, transients included.
+The C2000's own estimate (2208H) is not scored: it is a motor-model value, ~17 % low,
+that follows the command exactly (see C2000.Telemetry.torque_nm).
 
 Works on numpy arrays (columns read from the CSV by control.run_log.read_log), so a
 run of any length is compared without keeping per-sample Python objects in memory.
@@ -15,8 +18,9 @@ import numpy as np
 
 from control.runtime import RUNNING
 
+ESTIMATE_COLUMN = "estimated_torque_nm"
 # Run-log columns that running_torque_error() needs.
-ERROR_COLUMNS = ("phase", "elapsed_time", "torque_command_nm", "torque_c2000_nm")
+ERROR_COLUMNS = ("phase", "elapsed_time", "torque_command_nm", ESTIMATE_COLUMN)
 
 
 @dataclass(frozen=True)
@@ -32,7 +36,8 @@ def torque_error(times, commands, estimates):
     Error = estimate - command, pairing each estimate with the command that was
     in force when it was read. Telemetry is read before each cycle's torque
     write, so that is the previous cycle's command; the first sample is dropped.
-    Arguments are equal-length arrays; returns (times, errors) arrays.
+    Arguments are equal-length arrays; returns (times, errors) arrays. Blank
+    estimates (NaN, e.g. below MIN_RUN_RPM) give NaN errors.
     """
     times, commands, estimates = (np.asarray(a, dtype=float) for a in (times, commands, estimates))
     return times[1:], estimates[1:] - commands[:-1]
@@ -46,12 +51,13 @@ def running_torque_error(columns):
     running = columns["phase"] == RUNNING
     return torque_error(columns["elapsed_time"][running],
                         columns["torque_command_nm"][running],
-                        columns["torque_c2000_nm"][running])
+                        columns[ESTIMATE_COLUMN][running])
 
 
 def error_stats(errors):
-    """Bias, mean absolute error and maximum absolute error; None if there is no data."""
+    """Bias, mean absolute error and maximum absolute error over the non-blank errors; None if none."""
     errors = np.asarray(errors, dtype=float)
+    errors = errors[np.isfinite(errors)]
     if errors.size == 0:
         return None
     return ErrorStats(

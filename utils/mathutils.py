@@ -49,6 +49,20 @@ def power_to_torque_nm(power_w, rpm):
     return power_w / (2.0 * math.pi * rpm / 60.0)
 
 
+def interp_clamped(x, xs, ys):
+    """
+    Linear interpolation of the table (xs, ys) at x; xs must be increasing. Outside
+    xs the end values are held (no extrapolation).
+    """
+    if x <= xs[0]:
+        return ys[0]
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            frac = (x - xs[i - 1]) / (xs[i] - xs[i - 1])
+            return ys[i - 1] + frac * (ys[i] - ys[i - 1])
+    return ys[-1]
+
+
 class LowPassFilter:
     """
     First-order low-pass with time constant tau, for irregular sample times:

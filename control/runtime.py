@@ -30,7 +30,7 @@ from dataclasses import dataclass
 import config
 from control.run_log import RunLog
 from hardware.encoder import ShaftSpeedEstimator
-from utils.mathutils import power_to_torque_nm
+from utils.mathutils import interp_clamped, power_to_torque_nm
 from utils.timing import RatePacer
 
 IDLE = "IDLE"
@@ -53,13 +53,19 @@ class Sample:
     encoder_rpm: float            # raw signed encoder RPM (None if implausible)
     filtered_rpm: float
     c2000_rpm: int                # 2207H, unsigned
-    torque_c2000_nm: float        # 2208H in N·m: the drive's own torque estimate, signed
-    torque_elec_power_nm: float   # drive ELECTRICAL output power / filtered shaft speed (P/ω), signed.
-                                  # Includes the dyno motor's losses, so it is offset by about
-                                  # +losses/ω vs the shaft torque (in regen: less negative).
-                                  # None below MIN_RUN_RPM or with implausible encoder data.
-    current_a: float
-    output_power_kw: float        # signed, negative = regenerating
+    torque_c2000_nm: float        # 2208H in N·m: the drive's motor-model torque, signed. Not a usable
+                                  # torque reading yet (~17 % low, does not show real transients):
+                                  # see C2000.Telemetry.torque_nm. Logged and plotted, not scored.
+    estimated_torque_nm: float    # estimated shaft torque: (power_vi - no-load losses(rpm)) / ω.
+                                  # The best torque figure available; the validation statistics score it.
+    torque_elec_nm: float         # electrical torque: power_vi / ω, i.e. after the dyno motor's
+                                  # losses (in regen it is less negative than the shaft torque by
+                                  # about losses/ω). Logged and plotted, not scored.
+                                  # Both None below MIN_RUN_RPM or with implausible encoder data.
+    output_current_a: float       # output current (AC, drive -> motor)
+    output_voltage_v: float       # output voltage (AC line-line)
+    power_angle_deg: float        # signed angle between output voltage and current (+ motoring, - regen)
+    power_vi_kw: float            # output power sqrt(3)·V·I·cos(angle), signed (negative = regenerating)
     dc_bus_v: float
     drive_state: str              # 2101H state, e.g. "Operating"
 
@@ -342,13 +348,24 @@ class DynoRuntime:
             except Exception as e:
                 self._comm_failure(e)
 
-        # Torque from the drive's electrical output power, T = P / ω (ω from the filtered
-        # encoder speed). P is measured at the drive output, before the dyno motor's
-        # losses, so this reads about losses/ω more positive than the shaft torque
-        # (in regen, less negative). Near standstill P/ω is meaningless, hence the gate.
-        torque_elec_power = None
+        # Torque from the drive's output power P = power_vi (ω from the filtered encoder
+        # speed). Near standstill P/ω is meaningless, hence the gate.
+        #   electrical torque  P / ω: what the electrical power alone implies, i.e. after the
+        #                      dyno motor's own losses.
+        #   estimated torque   (P - losses) / ω, losses from config.NO_LOAD_LOSS_W at this
+        #                      speed: P = T·ω + losses (P < 0 when regenerating), so this is
+        #                      the motor's torque, the shaft torque the MUT works against.
+        # Unlike the C2000 estimate, the estimated torque does NOT follow the command
+        # exactly, and that is what makes it credible: it shows real torque transients,
+        # e.g. the torque staying low while the flux builds up after RUN (~4 s) and the slow
+        # settling at some torque levels (~40 s after RUN at -15 N·m, 2500 rpm), which the
+        # drive's model value (torque_c2000_nm) never shows.
+        torque_elec = estimated_torque = None
         if r.plausible and abs(r.rpm_filtered) >= config.MIN_RUN_RPM:
-            torque_elec_power = power_to_torque_nm(tel.output_power_kw * 1000.0, r.rpm_filtered)
+            power_w = tel.power_vi_kw * 1000.0
+            loss_w = interp_clamped(abs(r.rpm_filtered), config.NO_LOAD_LOSS_RPM, config.NO_LOAD_LOSS_W)
+            torque_elec = power_to_torque_nm(power_w, r.rpm_filtered)
+            estimated_torque = power_to_torque_nm(power_w - loss_w, r.rpm_filtered)
 
         # 7-9. Timing, logging, publishing
         cycle_time = time.monotonic() - t_start      # reads + write only: logging/publishing not included
@@ -368,9 +385,12 @@ class DynoRuntime:
             filtered_rpm=r.rpm_filtered,
             c2000_rpm=enc.c2000_rpm,
             torque_c2000_nm=tel.torque_nm,
-            torque_elec_power_nm=torque_elec_power,
-            current_a=tel.current_a,
-            output_power_kw=tel.output_power_kw,
+            estimated_torque_nm=estimated_torque,
+            torque_elec_nm=torque_elec,
+            output_current_a=tel.output_current_a,
+            output_voltage_v=tel.output_voltage_v,
+            power_angle_deg=tel.power_angle_deg,
+            power_vi_kw=tel.power_vi_kw,
             dc_bus_v=tel.dc_bus_v,
             drive_state=tel.state,
         )

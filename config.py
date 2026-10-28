@@ -96,3 +96,23 @@ MAX_ABS_RPM = 3000.0
 # encoder RPM, and shuts down if speed falls below it while torque is applied
 # (opposing torque on an undriven shaft would spin it backwards).
 MIN_RUN_RPM = 100.0
+
+# ==============================================================================
+# DYNO MOTOR NO-LOAD ELECTRICAL LOSSES (for the estimated shaft torque)
+# ==============================================================================
+# estimated torque = (power_vi - losses(rpm)) / ω, with power_vi the drive output power
+# (C2000.Telemetry.power_vi_kw, + motoring / - regenerating). The losses are the dyno
+# motor's electrical losses (copper loss of the magnetising current + iron loss); its
+# mechanical friction is carried by the MUT and never appears in the electrical power.
+#
+# How the table is made: for each speed, run Script 4 with Constant torque 0 N·m (dyno in
+# RUN, magnetised, commanding no torque) while the MUT holds that speed from its keypad;
+# average power_vi_kw over the steady part of the run (from ~5 s after "Profile started"
+# to the end, ~25 s). With zero torque, all the electrical power the drive supplies is
+# these losses. Zero torque is zero whatever the drive's torque scaling, so the table does
+# not depend on the C2000 torque-estimate issue.
+# Limits: measured at no load, so the extra copper loss of the torque current under load is
+# not included (a few tenths of a N·m at 30 N·m); interpolated linearly between the listed
+# speeds and held at the end values outside them.
+NO_LOAD_LOSS_RPM = (1007.0, 1511.0, 2519.0)     # increasing
+NO_LOAD_LOSS_W = (281.0, 403.0, 566.0)
