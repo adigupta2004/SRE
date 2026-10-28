@@ -26,7 +26,7 @@ PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
   (≤ 1 mm air gap) → EMC-PG01L card in C2000 slot 2; 4096 quadrature counts/rev.
 - **REG2000:** independent of Python (Automatic Mode, MI1–DCM); returns DC-bus energy to
   mains. Has its own Modbus port, unused.
-- **MUT:** CastNX 11 kW, 2-pole, 415 V, 2940 rpm, 19 A, ~35.7 N·m; CastNX EmotionX
+- **MUT:** CastNX 11 kW, 2-pole, 415 V, 2925 rpm, 19 A, ~35.9 N·m; CastNX EmotionX
   EMOX-11K VFD, run manually from its keypad at constant speed, not controlled by this
   software. Older docs that say "Shakti VFD" mean this drive.
 - **Dyno motor:** 30 kW, 2900 rpm, 2-pole (nameplate not in the repo; the vendor set
@@ -120,7 +120,8 @@ Keep `requirements.txt` updated whenever a package is installed.
 
 1. Script 1 (`test_01_vfd_core.py`) speed control — DONE (torque part not blocking).
 2. MUT setup, manual constant-speed operation — DONE.
-3. Mechanical coupling — IN PROGRESS. Fit the blue IM fan for coupled tests above 5 kW.
+3. Mechanical coupling — DONE. The 30 kW dyno motor's fan must be on (connector plugged
+   into the supply) for any coupled test above 5 kW.
 4. Encoder + C2000 PG interface — DONE (4096 counts/rev verified).
 5. Script 2 (`test_02_encoder.py`) encoder & shaft speed — DONE. Strictly read-only.
 6. C2000 in IM TQCPG. Script 3 (`test_03_coupled_torque.py`) — DONE on the rig;

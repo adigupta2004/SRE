@@ -40,7 +40,7 @@ SPEED_FILTER_TAU_S = 0.2
 
 # A single sample implying more than this is treated as a register jump (not a
 # real speed) and discarded. Shaft speed is bounded by the MUT (2-pole,
-# 2940 rpm rated) and Pr.01-00 = 100 Hz (6000 rpm); this leaves margin.
+# 2925 rpm rated) and Pr.01-00 = 100 Hz (6000 rpm); this leaves margin.
 MAX_PLAUSIBLE_RPM = 6000.0
 
 # ==============================================================================
@@ -89,7 +89,7 @@ TORQUE_LIMIT_MIN_NM = -TORQUE_REFERENCE_NM
 TORQUE_LIMIT_MAX_NM = 0.0
 
 # Controlled shutdown if |encoder RPM| exceeds this (dyno IM rated 2900 rpm, MUT 
-# rated 2940 rpm).
+# rated 2925 rpm).
 MAX_ABS_RPM = 3000.0
 
 # A run needs the MUT driving the shaft forward: it will not start below this
