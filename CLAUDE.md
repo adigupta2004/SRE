@@ -1,241 +1,187 @@
-# Regenerative Dynamometer (SRE) — project context
+# Regenerative Dynamometer (SRE) — project context for Claude
 
-Python software to turn an existing induction-motor test rig into a **plug-and-play
-regenerative dynamometer**. The user couples a Machine Under Test (MUT) to the dyno
-motor and controls everything from a PC GUI. Development proceeds through numbered
-test scripts, each proving one slice of the final app; they all share the code in
-`hardware/`, `control/`, `gui/` and `utils/` so nothing is rewritten for the final
-`dyno_app.py`.
+Python software that turns an induction-motor test rig into a plug-and-play
+regenerative dynamometer: a Machine Under Test (MUT) is coupled to the dyno motor and
+everything is controlled from a PC GUI. Development proceeds through numbered test
+scripts, each proving one slice of the final `dyno_app.py`; all of them share the code
+in `hardware/`, `control/`, `gui/` and `utils/`.
 
 The authoritative spec is `Manuals/Project overview.pdf` (tabs: Goals, Plan, Dyno side
-docs, MUT side docs). Read it before any non-trivial change.
+docs, MUT side docs). Read it before any non-trivial change. User-facing docs are in
+`README.md` (keep its script table in step with the plan).
 
 ## Hardware
 
 ```
-AC mains ─ EMC filter ─ Delta C2000 VFD ─ 30 kW loading IM (dyno) ══ mech coupling ══ 11 kW MUT IM ─ CastNX VFD ─ AC mains
+AC mains ─ EMC filter ─ Delta C2000 VFD ─ 30 kW loading IM (dyno) ══ coupling ══ 11 kW MUT IM ─ CastNX VFD ─ AC mains
                             │ DC+/DC−                 │ encoder (Baumer, 1024 PPR)
                        DC choke ─ Delta REG2000 ─ AC mains (regen back to grid)
 PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
 ```
 
-- **Dyno side** — Delta C2000 drives the loading IM; normal operation is **torque
-  control** (Pr.00-10 = 2, currently IM TQC *Sensorless*; IM TQCPG with encoder is the
-  next step). Python only sends RUN/STOP + a torque target (Pr.11-34); the C2000 runs
-  the motor control loop. Speed mode (Pr.00-10 = 0) is for commissioning only.
-- **Encoder** — Baumer EB260F (1024 PPR, TTL/RS422 at 5 V) + EBS.R-2R052 magnetic ring
-  (≤1 mm air gap) → Delta EMC-PG01L card in C2000 slot 2. 4096 quadrature counts/rev.
-- **REG2000** — independent of Python; in Automatic Mode (MI1–DCM) it returns DC-bus
-  energy to mains above an activation level. It also has its own Modbus RS-485 port
-  (not used yet; could share the bus at another slave address for monitoring).
-- **MUT** — CastNX 11 kW, 2-pole, 415 V, 2940 rpm, 19 A, ~35.7 N·m rated; CastNX
-  EmotionX EMOX-11K VFD. Operated **manually from its keypad** at constant speed;
-  probably cannot do torque control. Not controlled by this software (it has Modbus,
-  unused). Older doc sections that say "Shakti VFD" refer to this MUT drive.
-- The 30 kW dyno motor's nameplate is not in the repo (vendor set Pr.01-01, 01-02,
-  05-01..05-09). Rated torque [N·m] = Pr.05-02 [kW]·1000 / (2π·Pr.05-03 [rpm]/60) — read the params from the
-  drive (Modbus address 0x05nn) to confirm. config.py holds the torque scaling:
-  nameplate MOTOR_RATED_POWER_KW = 30 / MOTOR_RATED_RPM = 2900 and PR_11_27_PCT = 36 are
-  the inputs; MOTOR_RATED_TORQUE_NM (98.79, 100 % of 2208H) and TORQUE_REFERENCE_NM
-  (35.56, 100 % of Pr.11-34) are derived. 2227H (torque in N·m) was rejected: integer N·m.
+- **Dyno (C2000):** torque control in **IM TQCPG** with encoder feedback (Pr.00-10 = 2,
+  Pr.00-13 = 0, Pr.11-33 = 1). Python sends only RUN/STOP and a torque target (Pr.11-34);
+  the drive runs the motor control loop. Speed mode (Pr.00-10 = 0) is for commissioning only.
+- **Encoder:** Baumer EB260F (1024 PPR, TTL/RS422 5 V) + EBS.R-2R052 magnetic ring
+  (≤ 1 mm air gap) → EMC-PG01L card in C2000 slot 2; 4096 quadrature counts/rev.
+- **REG2000:** independent of Python (Automatic Mode, MI1–DCM); returns DC-bus energy to
+  mains. Has its own Modbus port, unused.
+- **MUT:** CastNX 11 kW, 2-pole, 415 V, 2940 rpm, 19 A, ~35.7 N·m; CastNX EmotionX
+  EMOX-11K VFD, run manually from its keypad at constant speed, not controlled by this
+  software. Older docs that say "Shakti VFD" mean this drive.
+- **Dyno motor:** 30 kW, 2900 rpm, 2-pole (nameplate not in the repo; the vendor set
+  Pr.05-01..05-09). `config.py` holds the torque scaling: inputs MOTOR_RATED_POWER_KW,
+  MOTOR_RATED_RPM, PR_11_27_PCT (36); derived MOTOR_RATED_TORQUE_NM (98.79, 100 % of 2208H)
+  and TORQUE_REFERENCE_NM (35.56, 100 % of Pr.11-34).
 
 ## Code layout
 
+Each module's docstring explains it in detail; this is the map.
+
 ```
-config.py             user-editable settings: serial port/link, encoder PPR, loop rate, filter, limits
-hardware/             device-specific code (talks to or describes a device)
-  comms.py            open_instrument(): the only place pyserial/minimalmodbus is configured
-  registers.py        C2000 Modbus register map + command words (fixed hardware facts)
-  c2000.py            C2000 driver class: run/stop/reset_fault/set_frequency/set_torque,
-                      read_telemetry() -> Telemetry, read_encoder_sample() -> EncoderSample,
-                      read_cycle() -> both (runtime: 3 block reads per cycle)
-  encoder.py          ShaftSpeedEstimator: EncoderSample stream -> signed RPM (+ filtered)
-control/              dyno control logic: no Modbus details, no GUI code
-  torque_profiles.py  TorqueProfile: evaluate(t, rpm) -> N·m, duration_s, PARAMS (GUI builds
-                      fields from them); Constant, Ramp, Step, LinearRpm; PROFILES list
-  runtime.py          DynoRuntime: the loop itself, single-threaded: start(), then
-                      run(next_command) in the caller's thread (commands: start / stop / exit);
-                      phases IDLE / ENTERING / RUNNING / STOPPING; callbacks on_sample /
-                      on_message / on_run_finished; Sample, RunResult (a small summary: no
-                      per-sample data is kept - runs may last hours); shutdown_timeout_s()
-  runtime_process.py  RuntimeProcess: runs a DynoRuntime in its own "control process" (spawn)
-                      and is the GUI's handle to it: same controls + poll(); command/event
-                      queues; the loop runs in the child's main thread; child ignores Ctrl+C,
-                      shuts the drive down if the GUI dies
-  run_log.py          RunLog: one CSV per run in <log location>/logs/ (2 '#' lines + COLUMNS);
-                      read_log(path, names): only the named columns as numpy arrays
-  validation.py       numpy: torque_error (estimate vs command in force = previous cycle),
-                      running_torque_error(columns) over RUNNING rows, error_stats
-gui/                  PySide6 + pyqtgraph; knows nothing about Modbus, never commands the drive
-  trace_plot.py       TracePlot: named traces, checkboxes in trace colours (= legend, wrapping
-                      grid), show/hide, autoscale to visible, clear, refresh();
-                      max_points = live rolling window, unset = whole arrays (downsampled,
-                      clip to view); 1-px antialiased pens (2-px AA is ~200x slower to paint)
-  quantities.py       QUANTITIES: plotted quantities (label with unit, Sample field = CSV
-                      column, colour, shown by default) shared by the live and results plots
-  log_view.py         LogView: the run-log viewer = everything about results (Results tab):
-                      summary, "Open CSV…", one plot (QUANTITIES + torque error) and stats,
-                      all columns read up front from the CSV (10 h: ~32 MB, ~1.7 s);
-                      show_run(RunResult) / open_log(path); self-contained (file problems
-                      shown in its own summary; needs no control process or drive)
-  profile_editor.py   ProfileEditor: profile picker, fields generated from PARAMS
-  telemetry_panel.py  TelemetryPanel: label/value grid
-  dyno_window.py      DynoWindow: running the dyno only (controls, telemetry, one live plot
-                      of QUANTITIES, messages); one GUI timer calls runtime.poll() then redraws;
-                      hosts a LogView as its Results tab and hands it each finished run;
-                      runtime=None -> opens as a log viewer (drive not connected)
-utils/                generic helpers, no hardware knowledge
-  mathutils.py        pure math: combine_words, to_signed32, wrap_delta, counts_to_rpm, LowPassFilter
-  timing.py           RatePacer (fixed-rate loop, no catch-up bursts)
-  console.py          banner, rule, live status line (show_status/log), enter_pressed, menu
-test_01_vfd_core.py   Script 1: interactive C2000 control + telemetry menu
-test_02_encoder.py    Script 2: READ-ONLY encoder shaft-speed monitor (+ scale cross-check)
-test_03_coupled_torque.py  Script 3: staged coupled torque test (0 % → sign check → constant/ramp)
-test_04_torque_runtime.py  Script 4: GUI runtime test (profiles, live plots, CSV, torque validation)
-logs/                 CSV run logs (not tracked in git)
-Manuals/              datasheets + project overview (PDFs, not tracked in git)
+config.py              user-editable settings: link, encoder, loop rate, torque scaling, limits, logs
+hardware/              device-specific code
+  comms.py             open_instrument(): the only place pyserial/minimalmodbus is configured
+  registers.py         C2000 register map + command words (fixed hardware facts)
+  c2000.py             C2000 driver: commands, N·m conversion, scaling check, block reads
+  encoder.py           ShaftSpeedEstimator: encoder samples -> signed RPM (+ filtered)
+control/               dyno logic: no Modbus details, no GUI code
+  torque_profiles.py   TorqueProfile subclasses (N·m vs time/rpm), PARAMS drive the GUI fields
+  runtime.py           DynoRuntime: the ~10 Hz loop, single-threaded run(next_command)
+  runtime_process.py   RuntimeProcess: runs DynoRuntime in its own process; the GUI's handle
+  run_log.py           CSV run logs: RunLog writes, read_log() reads columns back as numpy
+  validation.py        torque error (estimate vs command in force) and its statistics
+gui/                   PySide6 + pyqtgraph; never talks to the drive
+  trace_plot.py        TracePlot: named traces, checkbox legend, live window or whole arrays
+  quantities.py        QUANTITIES: what the live and results plots can show (shared list)
+  log_view.py          LogView: the Results tab / run-log viewer (works without a drive)
+  dyno_window.py       DynoWindow: running the dyno; hosts LogView; viewer-only if no runtime
+  profile_editor.py, telemetry_panel.py   small widgets
+utils/                 generic helpers: mathutils (pure), timing (RatePacer), console
+test_01..04_*.py       Scripts 1-4 (see Plan status)
+logs/, Manuals/        run logs and PDFs, not tracked in git
 ```
 
-Layering rules (keep these when adding scripts):
-- Scripts own only orchestration/UI and test-specific logic; anything a later script
-  or the final app will need goes into `hardware/` (device-specific), `control/` (dyno
-  logic), `gui/` (widgets) or `utils/` (generic). New areas get their own top-level
-  folder only when they are actually written — keep the structure generic and simple.
-- With a GUI, the loop runs in its own process (`RuntimeProcess`), never as a thread of
-  the GUI process: threads of one process share the GIL, and GUI work then stalls the loop
-  and skews encoder timestamps (seen on the rig: cycles 150-370 ms, alternating RPM noise
-  after ~30 s of growing plots). Only the control process opens the serial port, and only
-  DynoRuntime.run() (its main thread) touches the C2000. The GUI only calls
-  `start_run(profile, log_location)` / `request_stop()` / `poll()` on `RuntimeProcess`; the loop
-  never waits for the GUI. Scripts without a GUI may call DynoRuntime.run() directly.
-- Torque profiles return raw targets; the runtime clamps to the config limits and owns
-  slewing (enter profile / stop) at `TORQUE_SLEW_NM_PER_S`.
-- Torque is N·m everywhere above the drive (profiles, runtime, CSV, GUI); % exists only
-  in `c2000.py` (`set_torque_nm`, `Telemetry.torque_nm`). Scripts 1 and 3 still use %.
-- Register addresses/encodings only in `registers.py` and `c2000.py`. Tunables only in
-  `config.py`. Never hard-code a port, baud rate or register number in a script.
-- Library code **raises** on comm failure and **never prints**; scripts catch, log and
-  decide (continue / retry / stop). Validation errors raise `ValueError`.
-- `mathutils.py` stays pure (no I/O) so it can be tested without hardware.
-- Test scripts and `dyno_app.py` stay in the repo root so `import config`,
-  `from hardware...` etc. work with no path setup (decided deliberately;
-  revisit only if the root gets crowded).
+## Architecture rules
 
-## Running
+- Scripts hold only orchestration and test-specific logic; anything later scripts or the
+  final app need goes into `hardware/`, `control/`, `gui/` or `utils/`. Scripts and
+  `dyno_app.py` stay in the repo root so imports need no path setup.
+- **With a GUI, the loop runs in its own process** (`RuntimeProcess`), never as a thread of
+  the GUI process: threads share the GIL, and GUI work then stalls the loop and skews
+  encoder timestamps (seen on the rig). Only the control process opens the serial port;
+  only `DynoRuntime.run()` touches the C2000. The GUI calls only `start_run(profile,
+  log_location)`, `request_stop()`, `poll()` and `close()`.
+- Torque is **N·m everywhere above the drive**; % exists only in `c2000.py`. Profiles
+  return raw targets; the runtime clamps to the config limits and owns slewing
+  (`TORQUE_SLEW_NM_PER_S`). Scripts 1 and 3 still work in %.
+- Register addresses/encodings only in `registers.py` and `c2000.py`; tunables only in
+  `config.py`; never hard-code a port, baud rate or register number in a script.
+- Library code raises on comm failure and never prints; scripts catch, log and decide.
+  Validation errors raise `ValueError`. `mathutils.py` stays pure (no I/O).
+- Nothing per-sample is kept in memory during a run (runs may last hours): results are
+  read back from the CSV. Live plots show a bounded rolling window.
+- Every Modbus transaction costs ~20 ms on this drive (RTU frames need ≥ 10 ms silence):
+  keep transactions per cycle minimal (block reads; currently 3 reads + 1 write).
+
+## Product decisions (from the user)
+
+- Validation statistics: bias, MAE and max |error| only, for the C2000 estimate only.
+- The GUI stays clean: no caveats, footnotes or explanatory notes in the window. The CSV
+  header is two `#` lines (start time, profile). Caveats live in code comments.
+- `torque_elec_power_nm` (2206H power / filtered ω) is logged and plotted, not scored; it
+  includes the dyno motor's losses (≈ +losses/ω offset).
+- Logs go to `<log location>/logs/`, location chosen in the GUI (default: project root,
+  not remembered). The window opens as a log viewer when the drive isn't connected.
+
+## Testing without hardware
+
+No hardware is available to the assistant. Verify by compiling and by driving code with
+a fake `minimalmodbus.Instrument` (raw 16-bit register map; record writes); ask the user
+to run on the rig. For anything using `RuntimeProcess`:
+- pass `RuntimeProcess(vfd_factory=...)` an importable module-level function returning
+  `C2000(fake_instrument)`; patches and `config` changes in the parent do not reach the
+  spawned control process (pass `start_run(..., log_location=<temp dir> or None)`);
+- keep test scripts' top-level code under `if __name__ == "__main__":`;
+- GUI: `QT_QPA_PLATFORM=offscreen`, drive with `QTimer.singleShot`, check
+  `window.grab().save(...)`.
+
+## Running and git
 
 ```
 python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-python test_01_vfd_core.py       # Python 3.11; PySide6-Essentials + pyqtgraph for the GUI
+python test_04_torque_runtime.py
 ```
-`config.PORT_NAME` is the macOS USB-RS485 adapter path; change it on another machine.
-No hardware is available to the assistant: verify changes by compiling and by driving
-scripts with a fake `minimalmodbus.Instrument` (patch the class, script reads, record
-writes), and ask the user to run on the rig. For GUI scripts, run with
-`QT_QPA_PLATFORM=offscreen`, pass `RuntimeProcess(vfd_factory=...)` an importable
-module-level function that returns `C2000(fake_instrument)` (patching `C2000.connect` does not
-reach the spawned control process; nor do changes to `config` made in the parent - pass a
-temporary folder as `start_run(..., log_location)` or None instead), keep test scripts' top-level code under
-`if __name__ == "__main__":`, and drive the window with `QTimer.singleShot` clicks;
-`window.grab().save(...)` gives a screenshot to check.
+`config.PORT_NAME` is the macOS adapter path; change it on another machine. Git tracks
+everything except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/`, `logs/`, `Manuals/`.
+Keep `requirements.txt` updated whenever a package is installed.
 
-## Git
+## Plan status
 
-Everything is tracked except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/` (recreate
-from `requirements.txt`; untracked once PySide6 made it ~400 MB), `logs/` and `Manuals/`
-(large PDFs). Keep `requirements.txt` updated whenever a package is installed. User-facing usage docs are
-in `README.md`; keep its script table in step with the plan.
-
-## Plan status (from the overview's Plan tab)
-
-1. Script 1 speed control — DONE. (Torque-command part to be finished later; not blocking.)
+1. Script 1 (`test_01_vfd_core.py`) speed control — DONE (torque part not blocking).
 2. MUT setup, manual constant-speed operation — DONE.
-3. Mechanical coupling — IN PROGRESS.
-4. Encoder hardware + C2000 PG interface — DONE (4096 counts/rev verified).
-5. Script 2 encoder & shaft speed — DONE.
-6. C2000 configured for IM TQCPG (Pr.00-10 = 2, Pr.00-13 = 0, Pr.11-33 = 1).
-   **Script 3** `test_03_coupled_torque.py` — DONE, tested on the rig. It is
-   deliberately atomic: no logging, plots, fault handling or new registers. Torque sign
-   comes only from Pr.11-34 (RUN without FWD/REV bits). Script-level limits:
-   MAX_TEST_TORQUE_PCT, SIGN_TEST_TORQUE_PCT, RAMP_RATE_PCT_PER_S. Fit the blue IM fan
-   for any coupled test above 5 kW.
-7. **Script 4** `test_04_torque_runtime.py` — WRITTEN (offline-tested with a fake drive),
-   not yet run on the rig. It merges the originally planned runtime-loop, torque-profile
-   and torque-feedback-validation scripts: control/ runtime + profiles + CSV + validation,
-   gui/ widgets. Shutdown triggers: Stop, profile end, |RPM| > MAX_ABS_RPM, RPM <
-   MIN_RUN_RPM, implausible encoder, MAX_CONSECUTIVE_COMM_ERRORS. Validation statistics
-   are only bias, MAE and max |error| (user asked for nothing more), for the C2000 estimate
-   only, computed in the GUI from the run's CSV (no CSV -> summary line only). Memory must
-   stay bounded for runs of hours: nothing per-sample is kept in either process (10 h log:
-   ~15 MB of columns, ~1.3 s to open). A second estimate, `torque_elec_power_nm` = 2206H power / filtered ω, is logged and
-   plotted but not scored: it includes the dyno motor's losses (offset ≈ +losses/ω). That
-   caveat is stated in the code only (Sample and run_log COLUMNS comments); the GUI and the
-   CSV stay minimal (user's choice: no caveats or notes in the window; CSV header = two
-   '#' lines, start time and profile).
-   CSV logs go into `<log location>/logs/`; the location is chosen in the GUI (Browse…),
-   default `config.DEFAULT_LOG_LOCATION` = project root, not remembered between sessions.
-   **Loop rate:** measured 4 Hz on the rig with ~12 transactions/cycle (~20 ms each: C2000
-   RTU frames use >= 10 ms silent intervals + Pr.09-09 delay). Fixed with block reads:
-   `read_cycle()` = 222CH-222DH + 2200H-2209H + 2101H-2103H, 211FH cached, + torque write =
-   4 transactions/cycle; on the rig cycle_time was ~45-70 ms for the first ~30 s. Then the
-   loop slowed (150-370 ms) and RPM got noisy: GIL contention with the growing live plots
-   (same process). Fixed by `RuntimeProcess` (loop in its own process) + bounded live plots;
-   offline the loop now holds 10.0 Hz with flat RPM noise even with unbounded plots. To be
-   confirmed on the rig. Further headroom if ever needed: status block at ~1 Hz, Pr.09-09
-   -> 0, USB adapter (FTDI) latency timer.
-8. Next: drivecycle / road-load simulation (Mode C) as a profile that plugs into the
-   same runtime. Polynomial (Mode B) and T = k/ω profiles are not written yet.
+3. Mechanical coupling — IN PROGRESS. Fit the blue IM fan for coupled tests above 5 kW.
+4. Encoder + C2000 PG interface — DONE (4096 counts/rev verified).
+5. Script 2 (`test_02_encoder.py`) encoder & shaft speed — DONE. Strictly read-only.
+6. C2000 in IM TQCPG. Script 3 (`test_03_coupled_torque.py`) — DONE on the rig;
+   deliberately atomic (no logging/plots/fault handling), works in %.
+7. Script 4 (`test_04_torque_runtime.py`) — runs on the rig: profiles, live plots, CSV,
+   results viewer, validation. Loop holds 10 Hz (cycle_time ~45–49 ms, flat over 60 s+
+   runs, Oct 2026). Open: the torque-estimate finding below.
+8. Next: drive-cycle / road-load simulation (Mode C) as a profile in the same runtime;
+   polynomial (Mode B) and T = k/ω profiles not written yet.
 9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
+
+## Open issues
+
+- **C2000 torque estimate reads 0.83 × command** (2208H; constant at 5/10/20 N·m, 485 and
+  1000 rpm, TQCPG). Our scaling is confirmed (2227H agrees) and the command arrives
+  unchanged (2228H). At 1000 rpm, P/ω is a physical lower bound on |shaft torque| that the
+  estimate falls below, so the shaft torque is close to the command and the *estimate* is
+  ~17 % low. Suspected: motor-1 parameters (Pr.05-01, 05-05..05-09; auto-tune Pr.05-00).
+  **Do not rescale in software.** Until fixed, validation stats mostly measure this.
+  Independent checks: MUT/dyno power bracket at high power, torque arm at standstill,
+  inline torque transducer.
+- Comm-loss timeout Pr.09-03 is 0.0 s (disabled) for testing; intended 1.0 s. The loop
+  keeps talking at 10 Hz in its own process, so enabling it is a rig decision.
+- A software/hardware overspeed trip is still TODO (Pr.11-37/11-38 only regulate speed).
+- E-stop: hardwired STO (future), independent of Python.
 
 ## Operating rules the software must respect
 
-- **Normal stop:** ramp Pr.11-34 to 0 %, confirm, then STOP (C2000 is coast-stop, Pr.00-22 = 1).
-- Before RUN or fault reset: Python must be commanding STOP and 0 % torque.
-- Comm loss: Pr.09-02 = 2 (fault + coast) with Pr.09-03 timeout — intended 1.0 s, but
-  **currently 0.0 s (disabled) for testing**. A loop must keep talking to the drive
-  at ~10 Hz once the timeout is enabled; with the loop in its own process the GUI can no
-  longer stall it, so enabling it is now a rig decision, not a software blocker.
-- Torque-mode speed limits are Pr.11-37/11-38 (% of Pr.01-00 = 100 Hz); they are speed
-  regulation, not a fault — a separate software/hardware overspeed trip is still TODO.
-- Software caps on max torque, rpm and power are required in all modes (GUI warns when hit).
-- E-stop is hardwired STO (future), independent of Python.
-- Script 2 is strictly read-only; keep any commissioning/diagnostic script that way
-  unless it is explicitly a control test.
+- Normal stop: ramp the torque to 0, write 0, then STOP (C2000 is coast-stop, Pr.00-22 = 1).
+- Before RUN or fault reset: Python must be commanding STOP and 0 torque.
+- Software caps on torque, rpm and power apply in all modes.
+- The runtime refuses to start unless Pr.05-02, Pr.05-03 and Pr.11-27 match `config.py`
+  (`C2000.verify_torque_scaling()`).
 
-## Hard-won register facts
+## Register facts (verified on the rig unless stated)
 
-- Pr.GG-nn Modbus address = `0xGGnn` (`registers.param_address`). Pr.11-34 = 0x0B22,
-  signed, 0.1 % units, range −100..+100 % of Pr.11-27.
-- 2000H: STOP = 0x0001, RUN = 0x0002, RUN FWD = 0x0012, RUN REV = 0x0022. 2001H freq
-  command (0.01 Hz, magnitude only — direction comes from 2000H). 2002H bit1 = reset.
-- 2207H motor speed is **unsigned** and unreliable (drops to 0 on STOP) — comparison only.
-- 2200H output current: decimal places are in the **high byte of 211FH**.
-- 2208H output torque: signed, 0.1 % of **motor rated torque** — NOT of Pr.11-27 like the
-  command (manual, Pr.00-04 = 8). With Pr.11-27 = 36 %, a −50 % command reads ≈ −18 %.
-  Compare command and estimate only after converting both to N·m.
-- Pr.11-27 (max torque command, integer % of rated) = 0x0B1B; Pr.05-02 (motor 1 rated
-  power, 0.01 kW) = 0x0502; Pr.05-03 (motor 1 rated speed, rpm) = 0x0503. Drive's rated
-  torque = Pr.05-02 / (Pr.05-03·2π/60) (manual, Pr.11-34). All three are compared with
-  config by `C2000.verify_torque_scaling()`, called from `DynoRuntime.start()`. 2101H bits 1-0: Stopped/Decelerating/Standby/Operating.
-- 2206H output power (0.1 kW) is **signed** — negative when regenerating (seen in
-  Script 3: read unsigned, −0.1 kW appeared as 6553.5 kW). Light regen reads ~0 kW
-  because the regenerated power only just covers motor losses.
-- Shaft speed: 222CH (low) / 222DH (high) = free-running 32-bit position counter,
-  4096 counts/rev; speed = signed modulo-2^32 delta / dt. 2209H = PG position
-  0..4095 per rev (wraps every rev; only for slow-speed cross-checks).
-  FWD (A leads B, Pr.10-02 = 1) = positive RPM.
-- Likely needed for Script 3 (from the manual, **not yet in `registers.py` or verified
-  on hardware**): 2100H (warning/error code), 2223H (control mode), 2227H (torque N·m),
-  2228H (torque command readback). Add them to `registers.py` only when used.
-- Reads are block reads (`c2000.py`): 2101H–2103H (3 words), 2200H–2209H (10 words),
-  222CH–222DH; 211FH (current decimals) read once per C2000 instance. Signed words
-  (2206H, 2208H) are decoded with `mathutils.to_signed16`. 10-word block reads are
-  verified on the rig (the manual's "n ≤ 16" data limit is ambiguous).
+- Pr.GG-nn Modbus address = `0xGGnn`. Pr.11-34 = 0x0B22: signed, 0.1 %, −100..+100 % of
+  Pr.11-27. Pr.11-27 = 0x0B1B (integer % of rated); Pr.05-02 = 0x0502 (0.01 kW);
+  Pr.05-03 = 0x0503 (rpm). Drive's rated torque = Pr.05-02 / (Pr.05-03·2π/60).
+- 2000H: STOP 0x0001, RUN 0x0002 (torque mode: no direction bits), RUN FWD 0x0012,
+  RUN REV 0x0022. 2001H freq command (0.01 Hz, magnitude only). 2002H bit1 = fault reset.
+- 2101H bits 1-0: Stopped/Decelerating/Standby/Operating. 2102H/2103H freq command/output.
+- 2200H output current: decimal places in the **high byte of 211FH** (read once).
+- 2206H output power: **signed**, 0.1 kW, negative when regenerating.
+- 2207H motor speed: **unsigned**, drops to 0 on STOP — comparison only.
+- 2208H output torque: signed, 0.1 % of **motor rated torque** (not of Pr.11-27 like the
+  command). Compare command and estimate only after converting both to N·m.
+- 2227H: the same torque estimate in 0.1 N·m (signed). 2228H: the Pr.11-34 command echoed
+  back (0.1 %), not the drive's internal reference. Neither is read by the code.
+- 222CH (low) / 222DH (high): free-running 32-bit position, 4096 counts/rev; speed =
+  signed modulo-2^32 delta / dt; FWD (A leads B, Pr.10-02 = 1) = positive. 2209H = PG
+  position 0..4095 per rev (slow-speed cross-checks only).
+- Block reads 2101H–2103H, 2200H–2209H (10 words) and 222CH–222DH work; the manual's
+  per-read limit ("n ≤ 16" data) is ambiguous. Signed words via `mathutils.to_signed16`.
+- Unverified (manual only, not in `registers.py`): 2100H warning/error code, 2223H
+  control mode. Add to `registers.py` only when used.
 - Modbus exception codes: 1 bad function, 2 bad address, 3 bad data, 4 execution failure.
 
 ## Reading the manuals
 
-PDFs are large (C2000 manual: 1173 pages). Use `pdftotext -layout` into a scratch dir
-and grep. Useful anchors in the C2000 text: "4. Address list" (Modbus map, Ch. 12
-Group 09, page 12.1-09-8), "11-34"/"11-36" (torque params), "Exception response".
-REG2000 Modbus map: grep "2203H" in its text. The Baumer detailed manual is mostly
-IO-Link parameterisation (not used; encoder runs as plain incremental ABZ).
+PDFs are large (C2000 manual: 1173 pages): `pdftotext -layout` into a scratch dir and
+grep. C2000 anchors: "4. Address list" (Modbus map, Ch. 12 Group 09, p. 12.1-09-8),
+"11-34"/"11-27" (torque params), "05 Motor Parameters", "Exception response". REG2000
+Modbus map: grep "2203H". The Baumer detailed manual is mostly IO-Link (not used).
