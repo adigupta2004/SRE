@@ -80,7 +80,7 @@ control/           dyno control logic, no Modbus and no GUI code
   run_log.py       one CSV file per run in logs/ (and reads them back)
   validation.py    commanded vs estimated torque error: bias, MAE, max error
 gui/               reusable PySide6 + pyqtgraph widgets; never talks to the hardware
-  trace_plot.py    named traces, legend, show/hide, autoscale, clear
+  trace_plot.py    named traces, legend, show/hide, autoscale, clear, hover cursor (results)
   log_view.py      viewer for saved run logs (used by the Results tab)
   quantities.py    the quantities both plots can show (label, unit, colour)
   profile_editor.py    profile picker with fields generated from each profile

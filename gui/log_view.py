@@ -3,8 +3,9 @@ LogView: the run-log viewer - everything about results, shown as DynoWindow's
 Results tab.
 
 It shows a run log (a CSV written by control.run_log): a summary header, one plot
-with a checkbox per quantity (gui/quantities.py, plus the torque error), and the
-validation statistics, plus an "Open CSV…" button for any older log. All of it is
+with a checkbox per quantity (gui/quantities.py, plus the torque error) and a hover
+cursor showing every quantity's value at the sample under the mouse, the validation
+statistics, and an "Open CSV…" button for any older log. All of it is
 read back from the file rather than kept in memory during the run, so runs of any
 length can be viewed: control.run_log.read_log reads the plotted columns as compact
 numpy arrays (a 10-hour log: ~30 MB, ~2 s to open), and TracePlot downsamples long
@@ -50,10 +51,11 @@ class LogView(QWidget):
         header.addWidget(self._summary, stretch=1)
         header.addWidget(open_button)
 
-        self._plot = TracePlot("Run", "time (s)", "")
+        # Hover cursor: exact logged values of every quantity at the sample under the mouse.
+        self._plot = TracePlot("Run", "time (s)", "", cursor=True)
         for q in QUANTITIES:
-            self._plot.add_trace(q.label, color=q.color, visible=q.shown)
-        self._plot.add_trace(ERROR_LABEL, color=ERROR_COLOR, visible=True)
+            self._plot.add_trace(q.label, color=q.color, visible=q.shown, decimals=q.decimals)
+        self._plot.add_trace(ERROR_LABEL, color=ERROR_COLOR, visible=True, decimals=2)
         # Every column any trace needs, read once per log.
         self._columns = sorted({TIME_COLUMN, *(q.column for q in QUANTITIES), *ERROR_COLUMNS})
 

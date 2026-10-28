@@ -17,6 +17,7 @@ class Quantity:
     column: str           # Sample field = CSV column
     color: str            # dark, saturated: reads well as a 1-px line
     shown: bool = False   # ticked when the window opens
+    decimals: int = 2     # shown by the results viewer's hover cursor
 
 
 QUANTITIES = [
@@ -24,12 +25,12 @@ QUANTITIES = [
     Quantity("Estimated torque (N·m)", "estimated_torque_nm", "#1b7837", shown=True),
     Quantity("C2000 torque estimate (N·m)", "torque_c2000_nm", "#b2182b", shown=True),
     Quantity("Electrical torque P/ω (N·m)", "torque_elec_nm", "#5aae61"),
-    Quantity("Encoder speed (rpm)", "encoder_rpm", "#54278f"),
-    Quantity("Filtered speed (rpm)", "filtered_rpm", "#8073ac"),
-    Quantity("C2000 speed (rpm)", "c2000_rpm", "#525252"),
+    Quantity("Encoder speed (rpm)", "encoder_rpm", "#54278f", decimals=1),
+    Quantity("Filtered speed (rpm)", "filtered_rpm", "#8073ac", decimals=1),
+    Quantity("C2000 speed (rpm)", "c2000_rpm", "#525252", decimals=0),
     Quantity("Output current (A)", "output_current_a", "#01665e"),
-    Quantity("Output voltage (V)", "output_voltage_v", "#8c510a"),
-    Quantity("Power angle (°)", "power_angle_deg", "#808000"),
-    Quantity("Output power (kW)", "power_vi_kw", "#c51b7d"),
-    Quantity("DC bus (V)", "dc_bus_v", "#000000"),
+    Quantity("Output voltage (V)", "output_voltage_v", "#8c510a", decimals=1),
+    Quantity("Power angle (°)", "power_angle_deg", "#808000", decimals=1),
+    Quantity("Output power (kW)", "power_vi_kw", "#c51b7d", decimals=3),
+    Quantity("DC bus (V)", "dc_bus_v", "#000000", decimals=1),
 ]

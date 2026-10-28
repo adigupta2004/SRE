@@ -53,7 +53,8 @@ control/               dyno logic: no Modbus details, no GUI code
   run_log.py           CSV run logs: RunLog writes, read_log() reads columns back as numpy
   validation.py        torque error (estimated torque vs command in force) and its statistics
 gui/                   PySide6 + pyqtgraph; never talks to the drive
-  trace_plot.py        TracePlot: named traces, checkbox legend, live window or whole arrays
+  trace_plot.py        TracePlot: named traces, checkbox legend, live window or whole arrays,
+                       optional hover cursor (values of all traces; used by LogView)
   quantities.py        QUANTITIES: what the live and results plots can show (shared list)
   log_view.py          LogView: the Results tab / run-log viewer (works without a drive)
   dyno_window.py       DynoWindow: running the dyno; hosts LogView; viewer-only if no runtime
