@@ -81,6 +81,7 @@ class TracePlot(QWidget):
         self._curves = {}          # trace name -> pyqtgraph curve
         self._data = {}            # trace name -> (xs, ys): deques (append) or arrays (set_data)
         self._dirty = set()        # traces changed since the last refresh(), i.e. need a redraw
+        self._markers = []         # labelled vertical lines (add_marker), removed by clear()
 
         # Hover cursor (cursor=True): a vertical line at the nearest sample, the time, and
         # every trace's value next to its checkbox.
@@ -156,10 +157,21 @@ class TracePlot(QWidget):
             self._curves[name].setData(np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
         self._dirty.clear()
 
+    def add_marker(self, x, label):
+        """Adds a labelled vertical line at x (e.g. an event in a run); clear() removes it."""
+        marker = pg.InfiniteLine(
+            pos=x, angle=90, movable=False, pen=pg.mkPen("#4d4d4d", width=1, style=Qt.DotLine),
+            label=label, labelOpts={"position": 0.97, "color": "#4d4d4d", "anchors": [(0, 0), (0, 0)]})
+        self._plot.addItem(marker, ignoreBounds=True)     # never affects autoscale
+        self._markers.append(marker)
+
     def clear(self):
         for name in self._curves:
             self._data[name] = self._new_buffers()
             self._curves[name].setData([], [])
+        for marker in self._markers:
+            self._plot.removeItem(marker)
+        self._markers.clear()
         self._dirty.clear()
         self._plot.enableAutoRange()
         self._hide_cursor()

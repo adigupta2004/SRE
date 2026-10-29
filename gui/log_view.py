@@ -22,10 +22,12 @@ are shown in its own summary.
 
 import os
 
+import numpy as np
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 import config
 from control.run_log import read_log
+from control.runtime import RUNNING
 from control.validation import ERROR_COLUMNS, error_stats, running_torque_error
 from gui.quantities import QUANTITIES
 from gui.trace_plot import TracePlot
@@ -127,6 +129,12 @@ class LogView(QWidget):
             self._plot.set_data(ERROR_LABEL, *running_torque_error(columns))
         else:
             missing.append(ERROR_LABEL)
+        # Profile time 0 (end of the entry ramp, first RUNNING sample): the x-axis is time
+        # since RUN, so profile events (e.g. a step at 60 s) appear this much later on it.
+        if "phase" in columns:
+            running = np.flatnonzero(columns["phase"] == RUNNING)
+            if running.size:
+                self._plot.add_marker(columns[TIME_COLUMN][running[0]], "Profile start")
         self._plot.refresh()
         details = [f"Not in this log: {', '.join(missing)}"] if missing else []
         stats = error_stats(running_torque_error(columns)[1]) if has_error_columns else None

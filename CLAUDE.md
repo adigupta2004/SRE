@@ -95,7 +95,9 @@ logs/, Manuals/        run logs and PDFs, not tracked in git
 - Power is `power_vi_kw` = √3·V·I·cos(angle) from 2204H/2200H/2205H; 2206H is not read
   (finer, no truncation; reasons in `C2000.Telemetry.power_vi_kw`).
 - Torque quantities: `estimated_torque_nm` = (power_vi − no-load losses(rpm)) / ω, the scored
-  estimate (loss table `config.NO_LOAD_LOSS_*`, measured with 0 N·m runs); `torque_elec_nm` =
+  estimate: the dyno's electromagnetic torque (the coupling torque adds the dyno's own
+  friction/windage, not measured; loss table `config.NO_LOAD_LOSS_*`, measured with 0 N·m
+  runs, electrical losses only); `torque_elec_nm` =
   power_vi / ω (after the motor's losses), logged and plotted, not scored; `torque_c2000_nm`
   (2208H) kept but documented as not usable yet.
 - Logs go to `<log location>/logs/`, location chosen in the GUI (default: project root,
@@ -135,8 +137,7 @@ Keep `requirements.txt` updated whenever a package is installed.
    deliberately atomic (no logging/plots/fault handling), works in %.
 7. Script 4 (`test_04_torque_runtime.py`) — runs on the rig: profiles, live plots, CSV,
    results viewer, validation. Loop holds 10 Hz (cycle_time ~45–49 ms, flat over 60 s+
-   runs, Oct 2026). Scores `estimated_torque_nm`; open: the torque findings below and a
-   fuller loss table.
+   runs, Oct 2026). Scores `estimated_torque_nm`; open: the torque findings below.
 8. Next: drive-cycle / road-load simulation (Mode C) as a profile in the same runtime;
    polynomial (Mode B) and T = k/ω profiles not written yet.
 9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
@@ -163,9 +164,16 @@ Keep `requirements.txt` updated whenever a package is installed.
   split between flux and torque changes: a slow internal state of the drive's control,
   not motor temperature. Handling (wait before scoring, etc.) is still to be decided.
 - `estimated_torque_nm` relies on the drive's own voltage value (2204H is probably the
-  commanded voltage) and on the no-load loss table (3 speeds so far; excludes the extra
-  copper loss under load). At ~1–2 kW the power figures may be off by ~50–100 W
-  (0.5–1 N·m at 1000 rpm), so low-power results are less certain.
+  commanded voltage) and on the no-load loss table (10 speeds, ~500–2775 rpm, measured
+  29 Oct 2026; excludes the extra copper loss under load). At ~1–2 kW the power figures
+  may be off by ~50–100 W (0.5–1 N·m at 1000 rpm), so low-power results are less certain.
+- The no-load losses rise with speed up to ~2265–2520 rpm and then fall (446 W at 2774 rpm,
+  steady values), unlike iron loss. Not flux reduction: current (10.12 A) and V/f
+  (8.0–8.3 V/Hz) are constant over the sweep; only the power angle moves towards 90°
+  (84.6° → 86.1°). Either the drive's torque is not exactly 0 at high speed (~−0.6 N·m
+  would explain it) or 2205H is slightly off there (cos φ ≈ 0.07–0.09, so 1° ≈ 15 % of
+  power). Unresolved. The table in config.py (entered 29 Oct) averages whole runs,
+  including the flux build-up after RUN, so it is 5–9 % below the steady values.
 - Comm-loss timeout Pr.09-03 is 0.0 s (disabled) for testing; intended 1.0 s. The loop
   keeps talking at 10 Hz in its own process, so enabling it is a rig decision.
 - A software/hardware overspeed trip is still TODO (Pr.11-37/11-38 only regulate speed).

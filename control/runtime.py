@@ -56,11 +56,12 @@ class Sample:
     torque_c2000_nm: float        # 2208H in N·m: the drive's motor-model torque, signed. Not a usable
                                   # torque reading yet (~17 % low, does not show real transients):
                                   # see C2000.Telemetry.torque_nm. Logged and plotted, not scored.
-    estimated_torque_nm: float    # estimated shaft torque: (power_vi - no-load losses(rpm)) / ω.
-                                  # The best torque figure available; the validation statistics score it.
+    estimated_torque_nm: float    # estimated electromagnetic torque of the dyno motor:
+                                  # (power_vi - no-load losses(rpm)) / ω. The best torque figure
+                                  # available; the validation statistics score it.
     torque_elec_nm: float         # electrical torque: power_vi / ω, i.e. after the dyno motor's
-                                  # losses (in regen it is less negative than the shaft torque by
-                                  # about losses/ω). Logged and plotted, not scored.
+                                  # electrical losses (in regen it is less negative than the
+                                  # electromagnetic torque by about losses/ω). Logged and plotted, not scored.
                                   # Both None below MIN_RUN_RPM or with implausible encoder data.
     output_current_a: float       # output current (AC, drive -> motor)
     output_voltage_v: float       # output voltage (AC line-line)
@@ -351,10 +352,14 @@ class DynoRuntime:
         # Torque from the drive's output power P = power_vi (ω from the filtered encoder
         # speed). Near standstill P/ω is meaningless, hence the gate.
         #   electrical torque  P / ω: what the electrical power alone implies, i.e. after the
-        #                      dyno motor's own losses.
+        #                      dyno motor's own electrical losses.
         #   estimated torque   (P - losses) / ω, losses from config.NO_LOAD_LOSS_W at this
-        #                      speed: P = T·ω + losses (P < 0 when regenerating), so this is
-        #                      the motor's torque, the shaft torque the MUT works against.
+        #                      speed: P = T·ω + losses (P < 0 when regenerating), so this is the
+        #                      motor's electromagnetic torque, the torque the drive controls.
+        #                      The torque at the coupling, which the MUT works against, is this
+        #                      plus the dyno's own friction and windage torque (supplied by the
+        #                      MUT through the shaft, so in neither P nor the loss table: not
+        #                      measured).
         # Unlike the C2000 estimate, the estimated torque does NOT follow the command
         # exactly, and that is what makes it credible: it shows real torque transients,
         # e.g. the torque staying low while the flux builds up after RUN (~4 s) and the slow

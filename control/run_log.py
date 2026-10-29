@@ -33,8 +33,8 @@ COLUMNS = [
     "c2000_rpm",
     "torque_c2000_nm",       # 2208H converted with the motor rated torque: drive's motor-model value,
                              # not a usable torque reading yet (see C2000.Telemetry.torque_nm)
-    "estimated_torque_nm",   # (power_vi - no-load losses) / ω: estimated shaft torque, scored by the
-                             # error statistics; blank below MIN_RUN_RPM
+    "estimated_torque_nm",   # (power_vi - no-load losses) / ω: estimated electromagnetic torque,
+                             # scored by the error statistics; blank below MIN_RUN_RPM
     "torque_elec_nm",        # power_vi / ω: electrical torque, after the dyno motor's losses;
                              # blank below MIN_RUN_RPM; not scored
     "output_current_a",      # output current (AC)

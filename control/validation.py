@@ -1,8 +1,10 @@
 """
 Commanded vs estimated torque comparison, computed from a run log.
 
-The scored estimate is estimated_torque_nm: the shaft torque derived from the drive's
-output power minus the dyno motor's no-load losses (control/runtime.py). It is not an
+The scored estimate is estimated_torque_nm: the dyno's electromagnetic torque, derived
+from the drive's output power minus the dyno motor's no-load losses (control/runtime.py),
+i.e. the torque the drive controls (the coupling torque adds the dyno's own friction and
+windage, which is not measured). It is not an
 independent torque measurement (it relies on the drive's own voltage and current values
 and on the loss table in config.py), but it reflects real torque, transients included.
 The C2000's own estimate (2208H) is not scored: it is a motor-model value, ~17 % low,
