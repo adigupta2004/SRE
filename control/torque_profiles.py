@@ -30,7 +30,7 @@ class Param:
 
 
 def torque_param(key, label, default):
-    """A torque parameter (N·m), bounded by the commissioning torque limits."""
+    """A torque parameter (N·m), bounded by the operating torque limits."""
     return Param(key, label, default, config.TORQUE_LIMIT_MIN_NM, config.TORQUE_LIMIT_MAX_NM, decimals=2)
 
 

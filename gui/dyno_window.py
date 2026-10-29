@@ -67,7 +67,8 @@ class DynoWindow(QMainWindow):
     def __init__(self, runtime, startup_error=None):
         """runtime: a started RuntimeProcess, or None to open as a log viewer only."""
         super().__init__()
-        self.setWindowTitle("Dyno - Torque Runtime" if runtime else "Dyno - Log Viewer (drive not connected)")
+        self.setWindowTitle("Regenerative Dynamometer" if runtime
+                            else "Regenerative Dynamometer - Log Viewer (drive not connected)")
         self.runtime = runtime
         self._phase = IDLE
         self._close_pending = False
@@ -153,7 +154,7 @@ class DynoWindow(QMainWindow):
         if startup_error:
             self._log(f"[ERROR] Drive not connected: {startup_error}")
             self._log("Log viewer only: use Open CSV… on the Results tab. "
-                      "Restart the script to run the dyno.")
+                      "Restart main.py to run the dyno.")
             self._tabs.setCurrentIndex(1)
 
     # --------------------------------------------------------------------------

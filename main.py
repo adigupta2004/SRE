@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Script 04: Torque Runtime, Profiles and Torque-Feedback Validation
-------------------------------------------------------------------
+Regenerative Dynamometer - the dyno software
+--------------------------------------------
 Hardware: Delta C2000 (IM TQCPG, torque from RS-485) driving the dyno IM,
           coupled to the MUT, which is run separately from its own keypad.
-Purpose:  prove the reusable ~10 Hz runtime (control/runtime.py), torque profiles
-          (control/torque_profiles.py), CSV logging, live plots and the
-          commanded vs C2000-estimated torque comparison, with a clean
-          torque -> 0 -> STOP shutdown.
+Purpose:  run the dyno from one window: choose a torque profile, run it in the ~10 Hz
+          runtime (control/runtime.py) with live plots, log every run to CSV, and view
+          the results (commanded vs estimated torque and its error statistics) for this
+          or any older run, always ending with a clean torque -> 0 -> STOP shutdown.
+          Without a drive connected the window opens as a log viewer only.
 
-This script only wires the pieces together, in two processes:
+This file only wires the pieces together, in two processes:
     control process:  C2000 (hardware) -> DynoRuntime (control)   the 10 Hz loop + CSV log
     this process:     RuntimeProcess (control) <-> DynoWindow (gui)
 The control process is started by RuntimeProcess and owns the serial port; this
@@ -20,7 +21,7 @@ Flow: connect -> 0 N·m + STOP -> check C2000 torque settings matches config (to
 -> start the MUT forward and watch the live RPM -> choose a profile -> Start
 (0 N·m + RUN, slew into the profile) -> run until Stop or profile end -> ramp to
 0, write 0 N·m, STOP -> results shown in the window. Torque is in N·m throughout.
-Limits are in config.py (COMMISSIONING LIMITS). Ctrl+C closes the window,
+Limits are in config.py (OPERATING LIMITS). Ctrl+C closes the window,
 which stops any active run through the same shutdown path.
 """
 
@@ -39,7 +40,7 @@ from utils.console import banner
 
 def main():
     banner(
-        "Torque Runtime & Validation Test (Script 04)",
+        "Regenerative Dynamometer",
         comms.describe_link(),
         f"Loop {config.LOOP_RATE_HZ:g} Hz | Torque {config.TORQUE_LIMIT_MIN_NM:.2f} .. "
         f"{config.TORQUE_LIMIT_MAX_NM:.2f} N·m | |RPM| <= {config.MAX_ABS_RPM:g} | "
@@ -86,7 +87,7 @@ def main():
                 print("[VFD] Runtime stopped cleanly; serial port closed.")
             else:
                 print("[ERROR] Runtime did not finish its shutdown - check the drive and use keypad STOP.")
-        print("[VFD] Script 04 ended.")
+        print("[VFD] Dyno software ended.")
     return 0
 
 

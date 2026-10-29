@@ -1,5 +1,5 @@
 """
-Terminal output helpers shared by the test scripts.
+Terminal output helpers shared by main.py and the commissioning scripts.
 """
 
 import select

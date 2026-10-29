@@ -6,11 +6,10 @@ Under Test (MUT) coupled to its shaft and returns the absorbed energy to the gri
 PC talks to the C2000 over Modbus RTU (RS-485) to command torque and read telemetry; a
 Baumer encoder on the dyno shaft provides signed shaft speed.
 
-The final application (`dyno_app.py`, a GUI with torque-profile, custom-function and
-drivecycle modes) is built on a foundation proven step by step: each `test_XX_*.py`
-script proves one part of it on the real hardware, and all of them share the code in
-`hardware/`, `control/`, `gui/` and `utils/`. The operating modes themselves are
-implemented directly in the final application, on the Script 4 runtime.
+The dyno software is `main.py`: one window to choose and run torque profiles, watch live
+plots, log every run to CSV and view the results. The `test_0X_*.py` scripts proved the
+hardware step by step and remain as commissioning and debugging tools. Everything shares
+the code in `hardware/`, `control/`, `gui/` and `utils/`.
 
 ## Setup
 
@@ -22,7 +21,7 @@ implemented directly in the final application, on the Script 4 runtime.
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-   Afterwards, just `source .venv/bin/activate` before running a script.
+   Afterwards, just `source .venv/bin/activate` before running the software.
 2. **RS-485 link** — connect the USB-RS485 adapter A+ → C2000 SG+, B− → SG−, with the
    C2000's 485 termination switch at "120" and a 120 Ω resistor across A+/B− at the
    adapter end (twisted pair).
@@ -32,26 +31,25 @@ implemented directly in the final application, on the Script 4 runtime.
    Pr.09-00 = 1 (address), Pr.09-01 = 38.4 kbps, Pr.09-04 = 14 (8,E,1 RTU),
    Pr.09-30 = 0. The full parameter list is in the project overview document.
 
-Scripts live in the repository root, so imports from `hardware/`, `control/`, `gui/`
-and `utils/` work without any setup.
+`main.py` and the scripts live in the repository root, so imports from `hardware/`,
+`control/`, `gui/` and `utils/` work without any setup.
 
-## Scripts
+## Programs
 
-| Script | Status | What it does |
+| Program | Status | What it does |
 |---|---|---|
-| `test_01_vfd_core.py` | Done (speed control) | Interactive menu: RUN / STOP / fault reset, speed (Hz) or torque (%) target, telemetry readout. The control mode chosen in the script must match Pr.00-10 on the keypad. |
-| `test_02_encoder.py` | Done | **Read-only** shaft-speed monitor: live signed RPM from the encoder, compared with the C2000's own estimate. Mode 1 also checks the encoder scaling while you turn the shaft slowly by hand. Never sends commands to the drive. |
-| `test_03_coupled_torque.py` | Done | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
-| `test_04_torque_runtime.py` | Runs on the rig | GUI test of the reusable ~10 Hz runtime: choose a torque profile (constant, ramp, step, linear vs RPM), Torque is entered, plotted and logged in N·m. Start → 0 N·m + RUN → slew into the profile → run with live torque and speed plots → Stop or profile end → ramp to 0, write 0 N·m, STOP. Refuses to start if Pr.11-27 on the drive differs from `config.PR_11_27_PCT` (the N·m scaling depends on it). Writes one CSV per run into a `logs/` folder at the chosen log location ("Save CSV log" checkbox, on by default; "Browse…" to choose the location, default the project root) and shows commanded torque against the estimated torque: output power (from output voltage, output current and power angle) minus the dyno motor's no-load losses (table in `config.py`), divided by shaft speed. This is scored: error plot and bias / MAE / max error. Also plotted: the electrical torque (output power / shaft speed, i.e. after the motor's losses) and the C2000's own torque estimate, which is currently not usable (about 17 % low, see CLAUDE.md). Profile times (e.g. the step time and durations) count from the end of the entry ramp, marked "Profile start" on the Results plot, whose x-axis is time since RUN; hovering over the plot shows every logged value at that point. Results are read back from the CSV, and "Open CSV…" shows any older run log; without a drive connected the window opens as a log viewer only. Limits are in `config.py` (COMMISSIONING LIMITS). |
-| `dyno_app.py` | Planned | The final application, built directly on the Script 4 runtime (no separate Script 5). Mode A: standard torque profiles (constant, T = mω + c, T = k/ω, time-based step). Mode B: custom polynomial torque in ω or t. Mode C: drivecycle / road-load simulation. Torque, RPM and power limits in all modes; live and post-run plots, CSV and PNG export, torque-tracking validation. Once it exists, the test scripts remain only as commissioning and debugging tools. |
+| `main.py` | The dyno software, runs on the rig | One window running the ~10 Hz runtime: choose a torque profile (constant, ramp, step, linear vs RPM), Torque is entered, plotted and logged in N·m. Start → 0 N·m + RUN → slew into the profile → run with live torque and speed plots → Stop or profile end → ramp to 0, write 0 N·m, STOP. Refuses to start if Pr.11-27 on the drive differs from `config.PR_11_27_PCT` (the N·m scaling depends on it). Writes one CSV per run into a `logs/` folder at the chosen log location ("Save CSV log" checkbox, on by default; "Browse…" to choose the location, default the project root) and shows commanded torque against the estimated torque: output power (from output voltage, output current and power angle) minus the dyno motor's no-load losses (table in `config.py`), divided by shaft speed. This is scored: error plot and bias / MAE / max error. Also plotted: the electrical torque (output power / shaft speed, i.e. after the motor's losses) and the C2000's own torque estimate, which is currently not usable (about 17 % low, see CLAUDE.md). Profile times (e.g. the step time and durations) count from the end of the entry ramp, marked "Profile start" on the Results plot, whose x-axis is time since RUN; hovering over the plot shows every logged value at that point. Results are read back from the CSV, and "Open CSV…" shows any older run log; without a drive connected the window opens as a log viewer only. Limits are in `config.py` (OPERATING LIMITS). |
+| `test_01_vfd_core.py` | Commissioning tool | Interactive menu: RUN / STOP / fault reset, speed (Hz) or torque (%) target, telemetry readout. The control mode chosen in the script must match Pr.00-10 on the keypad. |
+| `test_02_encoder.py` | Commissioning tool | **Read-only** shaft-speed monitor: live signed RPM from the encoder, compared with the C2000's own estimate. Mode 1 also checks the encoder scaling while you turn the shaft slowly by hand. Never sends commands to the drive. |
+| `test_03_coupled_torque.py` | Commissioning tool | First coupled torque test (MUT running forward from its keypad). Stages: MUT only → dyno RUN at 0 % → −2 % sign check (must oppose the MUT) → constant and ramped torque. Every command is limited by `MAX_TEST_TORQUE_PCT` at the top of the script; every exit, including Ctrl+C, ramps to 0 %, writes 0 % and sends STOP. Needs Pr.09-03 = 0.0 (comm timeout off). |
 
 Example:
 ```
-python test_02_encoder.py
+python main.py
 ```
-Press Ctrl+C to stop a monitoring script; `q` quits the Script 1 menu. In Script 3,
-Enter leaves a live display and Ctrl+C is a controlled shutdown. Script 4 opens a
-window; closing it (or Ctrl+C in the terminal) stops any active run first.
+`main.py` opens a window; closing it (or Ctrl+C in the terminal) stops any active run
+first. In the scripts, Ctrl+C stops a monitoring script and `q` quits the Script 1 menu;
+in Script 3, Enter leaves a live display and Ctrl+C is a controlled shutdown.
 
 ## Safety
 
@@ -67,7 +65,8 @@ window; closing it (or Ctrl+C in the terminal) stops any active run first.
 ## Code layout
 
 ```
-config.py          settings you may need to change (port, encoder, loop rate, limits)
+main.py            the dyno software (starts the control process and the window)
+config.py          settings you may need to change (port, encoder, loop rate, limits, loss table)
 hardware/          everything that talks to or describes a device
   comms.py         opens the Modbus RTU connection
   registers.py     C2000 Modbus register addresses and command words
@@ -90,13 +89,13 @@ utils/             generic helpers with no hardware knowledge
   mathutils.py     counter arithmetic, unit conversion, low-pass filter
   timing.py        fixed-rate loop timing
   console.py       terminal display helpers (banners, status line, menus)
-test_XX_*.py       step-by-step hardware test scripts
+test_0X_*.py       commissioning / debugging scripts (Scripts 1-3)
 logs/              CSV run logs (kept out of git)
 Manuals/           datasheets and project overview (kept out of git)
 ```
 
-To add a new script: put anything the final application will also need into
-`hardware/` (device-specific), `control/` (dyno logic), `gui/` (widgets) or `utils/`
-(generic), and keep only the test-specific orchestration in the script. Settings belong in
-`config.py` and register numbers in `registers.py`; scripts should not hard-code
-either. See [CLAUDE.md](CLAUDE.md) for the full design notes and register details.
+To add a feature or a script: put anything shared into `hardware/` (device-specific),
+`control/` (dyno logic), `gui/` (widgets) or `utils/` (generic), and keep only
+orchestration in `main.py` or the script. Settings belong in `config.py` and register
+numbers in `registers.py`; nothing else should hard-code either. See
+[CLAUDE.md](CLAUDE.md) for the full design notes and register details.

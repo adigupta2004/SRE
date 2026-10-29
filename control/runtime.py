@@ -8,7 +8,7 @@ slow it down (see there for why); scripts without a GUI can use DynoRuntime dire
 run() is the loop; it owns the C2000 while it runs. Every cycle it:
     reads the encoder sample and C2000 telemetry -> signed shaft RPM
     evaluates the active torque profile (actual elapsed time, actual RPM)
-    clamps to the commissioning torque limits -> writes the torque setpoint
+    clamps to the operating torque limits -> writes the torque setpoint
     measures loop timing -> logs the sample -> publishes it
 and paces itself with RatePacer. Nothing here waits on a GUI: results are
 published through callbacks, which must return quickly (e.g. put the event on a queue).

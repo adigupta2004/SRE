@@ -1,5 +1,6 @@
 """
-User-editable configuration shared by all test scripts and the final app.
+User-editable configuration shared by the dyno software (main.py) and the
+commissioning scripts (test_01..03).
 
 Only values that someone might reasonably change belong here. Fixed hardware
 facts (register addresses, command words, parameter ranges) live in
@@ -65,7 +66,7 @@ LOG_FOLDER_NAME = "logs"
 DEFAULT_LOG_LOCATION = os.path.dirname(os.path.abspath(__file__))
 
 # ==============================================================================
-# COMMISSIONING LIMITS (runtime)
+# OPERATING LIMITS (runtime)
 # ==============================================================================
 # Torque scaling, from the dyno motor nameplate (30 kW, 2900 rpm -> 98.79 N·m rated).
 # Pr.11-27 is set to 36 %, ie the max commandable torque is 36 % of rated dyno motor
@@ -105,7 +106,7 @@ MIN_RUN_RPM = 100.0
 # motor's electrical losses (copper loss of the magnetising current + iron loss); its
 # mechanical friction is carried by the MUT and never appears in the electrical power.
 #
-# How the table is made: for each speed, run Script 4 with Constant torque 0 N·m (dyno in
+# How the table is made: for each speed, run main.py with Constant torque 0 N·m (dyno in
 # RUN, magnetised, commanding no torque) while the MUT holds that speed from its keypad;
 # average power_vi_kw over the steady part of the run (from ~5 s after "Profile started"
 # to the end, ~25 s). With zero torque, all the electrical power the drive supplies is

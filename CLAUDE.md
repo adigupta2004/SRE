@@ -2,13 +2,14 @@
 
 Python software that turns an induction-motor test rig into a plug-and-play
 regenerative dynamometer: a Machine Under Test (MUT) is coupled to the dyno motor and
-everything is controlled from a PC GUI. Development proceeds through numbered test
-scripts, each proving one slice of the final `dyno_app.py`; all of them share the code
-in `hardware/`, `control/`, `gui/` and `utils/`.
+everything is controlled from a PC GUI. The dyno software is `main.py` (formerly Script 4,
+`test_04_torque_runtime.py`); the numbered `test_01..03` scripts that proved the hardware
+step by step remain as commissioning/debugging tools. All of them share the code in
+`hardware/`, `control/`, `gui/` and `utils/`.
 
 The authoritative spec is `Manuals/Project overview.pdf` (tabs: Goals, Plan, Dyno side
 docs, MUT side docs). Read it before any non-trivial change. User-facing docs are in
-`README.md` (keep its script table in step with the plan).
+`README.md` (keep its program table in step with the code).
 
 ## Hardware
 
@@ -39,6 +40,7 @@ PC (Python) ─ USB↔RS-485 ─ C2000 (Modbus RTU, slave 1, 38400 8E1)
 Each module's docstring explains it in detail; this is the map.
 
 ```
+main.py                the dyno software: starts RuntimeProcess, opens DynoWindow (viewer-only if no drive)
 config.py              user-editable settings: link, encoder, loop rate, torque scaling, limits, logs,
                        no-load loss table
 hardware/              device-specific code
@@ -60,15 +62,15 @@ gui/                   PySide6 + pyqtgraph; never talks to the drive
   dyno_window.py       DynoWindow: running the dyno; hosts LogView; viewer-only if no runtime
   profile_editor.py, telemetry_panel.py   small widgets
 utils/                 generic helpers: mathutils (pure), timing (RatePacer), console
-test_01..04_*.py       Scripts 1-4 (see Plan status)
+test_01..03_*.py       Scripts 1-3: commissioning/debugging tools (see Plan status)
 logs/, Manuals/        run logs and PDFs, not tracked in git
 ```
 
 ## Architecture rules
 
-- Scripts hold only orchestration and test-specific logic; anything later scripts or the
-  final app need goes into `hardware/`, `control/`, `gui/` or `utils/`. Scripts and
-  `dyno_app.py` stay in the repo root so imports need no path setup.
+- `main.py` and the scripts hold only orchestration (and test-specific logic); anything
+  shared goes into `hardware/`, `control/`, `gui/` or `utils/`. `main.py` and the scripts
+  stay in the repo root so imports need no path setup.
 - **With a GUI, the loop runs in its own process** (`RuntimeProcess`), never as a thread of
   the GUI process: threads share the GIL, and GUI work then stalls the loop and skews
   encoder timestamps (seen on the rig). Only the control process opens the serial port;
@@ -119,7 +121,7 @@ to run on the rig. For anything using `RuntimeProcess`:
 
 ```
 python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-python test_04_torque_runtime.py
+python main.py
 ```
 `config.PORT_NAME` is the macOS adapter path; change it on another machine. Git tracks
 everything except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/`, `logs/`, `Manuals/`.
@@ -135,12 +137,10 @@ Keep `requirements.txt` updated whenever a package is installed.
 5. Script 2 (`test_02_encoder.py`) encoder & shaft speed — DONE. Strictly read-only.
 6. C2000 in IM TQCPG. Script 3 (`test_03_coupled_torque.py`) — DONE on the rig;
    deliberately atomic (no logging/plots/fault handling), works in %.
-7. Script 4 (`test_04_torque_runtime.py`) — runs on the rig: profiles, live plots, CSV,
-   results viewer, validation. Loop holds 10 Hz (cycle_time ~45–49 ms, flat over 60 s+
-   runs, Oct 2026). Scores `estimated_torque_nm`; open: the torque findings below.
-8. Next: drive-cycle / road-load simulation (Mode C) as a profile in the same runtime;
-   polynomial (Mode B) and T = k/ω profiles not written yet.
-9. Final GUI `dyno_app.py` only after these are proven; it must only integrate proven code.
+7. The dyno software, `main.py` (formerly Script 4, `test_04_torque_runtime.py`) — DONE,
+   runs on the rig; it is the final software (Oct 2026): profiles, live plots, CSV, results
+   viewer with hover cursor, validation. Loop holds 10 Hz (cycle_time ~45–49 ms, flat over
+   60 s+ runs). Scores `estimated_torque_nm`; open: the torque findings below.
 
 ## Open issues
 
