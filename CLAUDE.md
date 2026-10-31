@@ -124,7 +124,8 @@ python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirem
 python main.py
 ```
 `config.PORT_NAME` is the macOS adapter path; change it on another machine. Git tracks
-everything except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/`, `logs/`, `Manuals/`.
+everything except `__pycache__/`, `*.pyc`, `.DS_Store`, `.venv/`, `logs/`, `Manuals/`,
+`Claude context files/`.
 Keep `requirements.txt` updated whenever a package is installed.
 
 ## Plan status
@@ -172,8 +173,7 @@ Keep `requirements.txt` updated whenever a package is installed.
   (8.0–8.3 V/Hz) are constant over the sweep; only the power angle moves towards 90°
   (84.6° → 86.1°). Either the drive's torque is not exactly 0 at high speed (~−0.6 N·m
   would explain it) or 2205H is slightly off there (cos φ ≈ 0.07–0.09, so 1° ≈ 15 % of
-  power). Unresolved. The table in config.py (entered 29 Oct) averages whole runs,
-  including the flux build-up after RUN, so it is 5–9 % below the steady values.
+  power). Unresolved.
 - Comm-loss timeout Pr.09-03 is 0.0 s (disabled) for testing; intended 1.0 s. The loop
   keeps talking at 10 Hz in its own process, so enabling it is a rig decision.
 - A software/hardware overspeed trip is still TODO (Pr.11-37/11-38 only regulate speed).

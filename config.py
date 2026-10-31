@@ -107,11 +107,13 @@ MIN_RUN_RPM = 100.0
 # mechanical friction is carried by the MUT and never appears in the electrical power.
 #
 # How the table is made: for each speed, run main.py with Constant torque 0 N·m (dyno in
-# RUN, magnetised, commanding no torque) while the MUT holds that speed from its keypad;
-# average power_vi_kw over the steady part of the run (from ~5 s after "Profile started"
-# to the end, ~25 s). With zero torque, all the electrical power the drive supplies is
-# these losses. Interpolated linearly between the listed speeds and held at the end values
-# outside them.
+# RUN, magnetised, commanding no torque, 30 s) while the MUT holds that speed from its
+# keypad; average power_vi_kw over the steady part of the run only: RUNNING rows from 5 s
+# after "Profile started" to the end (~25 s). The first seconds after RUN are left out
+# because the flux is still building up then and the power is low (including them would
+# make the values ~5-9 % too low). With zero torque, all the electrical power the drive
+# supplies is these losses. Interpolated linearly between the listed speeds and held at the
+# end values outside them.
 # Contains: the dyno motor's iron losses (hysteresis, eddy current) and the stator copper
 # loss of its magnetising current (~10 A, flows at any torque).
 # Not included: (1) mechanical losses (bearing friction, windage): at 0 N·m the MUT turns the
@@ -119,4 +121,4 @@ MIN_RUN_RPM = 100.0
 # copper loss of the torque-producing current under load (a few tenths of a N·m at 30 N·m).
 # Measured 2026-10-29.
 NO_LOAD_LOSS_RPM = (502.7, 754.6, 1007.3, 1259.0, 1510.8, 1765.0, 2015.5, 2265.1, 2519.7, 2773.7)     # increasing
-NO_LOAD_LOSS_W = (184.8, 222.8, 266.4, 318.2, 372.5, 432.3, 484.9, 516.9, 511.6, 423.7)
+NO_LOAD_LOSS_W = (194.4, 234.4, 282.5, 339.7, 399.8, 465.7, 523.1, 557.3, 561.1, 446.0)

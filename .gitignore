@@ -4,6 +4,7 @@ __pycache__/
 
 # Datasheets and project docs (large PDFs, kept out of git)
 Manuals/
+Claude context files/
 
 # macOS Finder metadata
 .DS_Store
@@ -11,5 +12,5 @@ Manuals/
 # Virtual environment (recreate with: pip install -r requirements.txt)
 .venv/
 
-# CSV run logs written by the test scripts
+# CSV run logs written by main.py
 logs/
